@@ -159,12 +159,26 @@ if CREW_AVAILABLE:
     class update_decisionTool(BaseTool):
         name:str = "UpdateDecisionTool"
         description:str = "Update the decision of customer id "
-        def _run(self,customer_id:str,decision:str,reason:str):
-            with open(DECISIONS_FILE) as f:
+        def _run(self, customer_id: str, decision: str, reason: str):
+
+            with open(DECISIONS_FILE, 'r') as f:
                 data = json.load(f)
-                for i in data:
-                    if i["customer_id"] == customer_id:
-                        pass
+            
+            customer_found = False
+            for i in data:
+                if i["customer_id"] == customer_id:
+                    i["decision"] = decision
+                    i["reason"] = reason
+                    i["created_at"] = datetime.utcnow().isoformat()
+                    customer_found = True
+                    break  
+
+            with open(DECISIONS_FILE, "w") as f:
+                json.dump(data, f, indent=2, default=str)
+                
+            return "Decision updated successfully"
+                        
+                        
 
 
 
@@ -173,13 +187,14 @@ if CREW_AVAILABLE:
         llm = LLM(model="gemini/gemini-2.5-flash", api_key=LLM_API_KEY) if LLM_API_KEY else LLM()
         
         if role == "admin":
-            tool_list = [FetchdecTool(),FetchTool()]
+            tool_list = [FetchdecTool(),FetchTool(),update_decisionTool()]
             agent_goal = f"Provide answers and all requested details in a clean, comprehensive, professional format based on the prompt: '{prompt}'. Always use FetchDecisions tool if the request is about decisions."
             agent_backstory = "Expert in providing comprehensive analysis and detailed data access to administrators. You have full access to all historical decisions via the FetchDecisions tool."
             task_description = (
                 "You are operating in Admin mode. Answer questions and accomplish the task using the available tools as the answer "
                 "Use the FetchDecisions tool to fetch all decisions. Parse the JSON output from the tool and **format the result ONLY as a clean, structured Markdown table** (including ID, Customer ID, Decision, and Reason). **Do not include any text, headers, or footers before or after the table**. "  
-                "Provide all details for the admin in a clean, structured format."
+                "Provide all details for the admin in a clean, structured format." 
+                "Use the update_decisionTool to modify the decision if the admin wishes to modify it using customer id, reason, decision"
             )
             expected_output = "A sentence with clean Markdown table showing all decisions, or the required JSON object for evaluation, or a professional, detailed answer."
         else:
