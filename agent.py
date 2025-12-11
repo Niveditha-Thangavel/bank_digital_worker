@@ -51,12 +51,21 @@ def _load_customer_accounts() -> List[Dict[str, Any]]:
 
 def _load_decisions() -> List[Dict[str, Any]]:
     data = _read_json_file(DECISIONS_FILE)
-    return data if isinstance(data, list) else []
+    return data
 
 def _append_decision(decision_obj: Dict[str, Any]) -> Dict[str, Any]:
-    decisions = _load_decisions()
-    decisions.append(decision_obj)
-    _write_json_file(DECISIONS_FILE, decisions)
+    decisions_data = _load_decisions()
+    if not isinstance(decisions_data, dict) or "decisions" not in decisions_data:
+        decisions_data = {"decisions": []}
+    decision_list = decisions_data["decisions"]
+    decision_list = [
+        d for d in decision_list
+        if d.get("customer_id") != decision_obj["customer_id"]
+    ]
+    decision_list.append(decision_obj)
+    decisions_data["decisions"] = decision_list
+    _write_json_file(DECISIONS_FILE, decisions_data)
+
     return decision_obj
 
 def list_customers() -> List[Dict[str, Any]]:
@@ -107,12 +116,12 @@ def list_decisions(customer_id: Optional[str] = None, limit: int = 100) -> List[
 
 def record_decision(customer_id: str, decision: str, reason: str) -> Dict[str, Any]:
     obj = {
-        "id": str(uuid.uuid4()),
         "customer_id": customer_id,
         "decision": decision,
         "reason": reason,
         "created_at": datetime.utcnow().isoformat()
     }
+    print(obj)
     return _append_decision(obj)
 
 def reload_sources():
@@ -153,8 +162,6 @@ if CREW_AVAILABLE:
         def _run(self):
             decisions = _load_decisions()
             return json.dumps(decisions)
-        
-
 
     class update_decisionTool(BaseTool):
         name:str = "UpdateDecisionTool"
@@ -178,25 +185,20 @@ if CREW_AVAILABLE:
                 
             return "Decision updated successfully"
                         
-                        
-
-
-
-
     def build_crew(prompt: str, role: str = "customer", tools: Optional[List[BaseTool]] = None) -> Crew:
         llm = LLM(model="gemini/gemini-2.5-flash", api_key=LLM_API_KEY) if LLM_API_KEY else LLM()
         
         if role == "admin":
-            tool_list = [FetchdecTool(),FetchTool(),update_decisionTool()]
+            tool_list = [FetchdecTool(),update_decisionTool()]
             agent_goal = f"Provide answers and all requested details in a clean, comprehensive, professional format based on the prompt: '{prompt}'. Always use FetchDecisions tool if the request is about decisions."
-            agent_backstory = "Expert in providing comprehensive analysis and detailed data access to administrators. You have full access to all historical decisions via the FetchDecisions tool."
+            agent_backstory = "Expert in providing comprehensive analysis and detailed data access to administrators. You have full access to all historical decisions via the FetchDecisions tool. have access and can fetch full decision data "
             task_description = (
                 "You are operating in Admin mode. Answer questions and accomplish the task using the available tools as the answer "
                 "Use the FetchDecisions tool to fetch all decisions. Parse the JSON output from the tool and **format the result ONLY as a clean, structured Markdown table** (including ID, Customer ID, Decision, and Reason). **Do not include any text, headers, or footers before or after the table**. "  
                 "Provide all details for the admin in a clean, structured format." 
-                "Use the update_decisionTool to modify the decision if the admin wishes to modify it using customer id, reason, decision"
+                "Use the update_decisionTool to modify the decision if the admin wishes to modify it using customer id, decision, and reason"
             )
-            expected_output = "A sentence with clean Markdown table showing all decisions, or the required JSON object for evaluation, or a professional, detailed answer."
+            expected_output = "A clean Markdown table showing all decisions, or the required JSON object for evaluation, or a professional, detailed answer."
         else:
             tool_list = [FetchTool(), RulesTool()]
             agent_goal = f"Provide details and chats in a friendly way and accomplish the task in '{prompt}'"
@@ -204,7 +206,7 @@ if CREW_AVAILABLE:
             task_description = (
                 "Chat with the user in a friendly manner. "
                 "Answer questions and accomplish the task using the available tools. "
-                "Use the RulesProvider to fetch decision rules when an eligibility check is requested. "
+                "Use the RulesProvider to fetch decision rules when an eligibility check is requested and mention as the given format Decision: and Reason:"
                 "Use the CustomerDataTool as a reference that you have access to the customer's data. If customer_id is not provided, you cannot access account details. If unable to answer, apologize and tell that you will come back soon, also thank them for their patience. Provide only their details to the customer, by using their customer id."
             )
             expected_output = "User friendly answer to the question (no json)."
@@ -331,34 +333,7 @@ def api_get_customer_front(customer_id: str):
     decisions = list_decisions(customer_id, limit=100)
     return {"status": "ok", "customer": cust, "transactions": txs, "credit_cards": cards, "loans": loans, "decisions": decisions}
 
-@app.get("/decisions")
-def api_get_decisions(customer_id: Optional[str] = Query(None), limit: int = 100, format: str = Query("table")):
-    rows = list_decisions(customer_id, limit)
 
-    structured = []
-    for d in rows:
-        cid = d.get("customer_id")
-        structured.append({
-            "id": d.get("id"),
-            "customer_id": cid,
-            "customer_name": _get_customer_name(cid),
-            "decision": d.get("decision"),
-            "reason": d.get("reason"),
-            "created_at": d.get("created_at")
-        })
-
-    structured = sorted(structured, key=lambda x: x.get("created_at",""), reverse=True)
-
-    fmt = (format or "table").lower()
-    if fmt == "json":
-        return {"status": "ok", "format": "json", "decisions": structured}
-    elif fmt == "csv":
-        csv_text = _decisions_to_csv(structured)
-        return {"status": "ok", "format": "csv", "csv": csv_text, "decisions": structured}
-    else:
-        md_table = _decisions_to_markdown_table(structured)
-        html_table = "<pre>" + html.escape(md_table) + "</pre>"
-        return {"status": "ok", "format": "table", "table": md_table, "table_html_pre": html_table, "decisions": structured}
 
 @app.post("/update-decisions")
 def api_update_decision(payload: Dict[str, Any] = Body(...)):
@@ -447,63 +422,11 @@ def api_chat(req: ChatRequest):
     _sessions_in_memory[session_id].append({"role":"assistant","text":assistant_reply,"time":datetime.utcnow().isoformat()})
     return {"reply": assistant_reply, "session_id": session_id, "session_snapshot": _sessions_in_memory.get(session_id)}
 
-@app.post("/admin/customers/{customer_id}/run-agent")
-def admin_run_agent_for_customer(customer_id: str):
-    if not CREW_AVAILABLE:
-        raise HTTPException(status_code=501, detail="Agent integration not available on this server build")
-    cust = get_customer(customer_id)
-    if not cust:
-        raise HTTPException(status_code=404, detail="customer not found")
-    txs = get_transactions(customer_id, limit=200)
-    cards = get_credit_cards(customer_id)
-    loans = get_loans(customer_id)
-    
-    prompt_parts = [
-        f"Admin request: Evaluate loan eligibility for customer {customer_id} using the following data and rules.",
-        DEFAULT_RULES_TEXT,
-        "Customer Data:",
-        f"Customer Profile: {json.dumps(cust, indent=2)}",
-        f"Credit Cards: {json.dumps(cards, indent=2)}",
-        f"Loans: {json.dumps(loans, indent=2)}",
-        f"Recent Transactions (top 50): {json.dumps(txs[:50], indent=2)}",
-        "Return EXACTLY a JSON object: {\"decision\":\"APPROVE|REVIEW|REJECT\",\"reason\":\"...\"} and NOTHING else."
-    ]
-    prompt = "\n\n".join(prompt_parts)
-    try:
-        llm = LLM(model="gemini/gemini-2.5-flash", api_key=LLM_API_KEY) if LLM_API_KEY else LLM()
-        
-        admin_agent = Agent(
-            role="Loan Eligibility Evaluator",
-            goal="Analyze the provided customer data against the default rules and return a strict JSON decision.",
-            backstory="A specialized, rules-driven expert for rapid credit evaluation, operating under strict protocol.",
-            tools=[],
-            llm=llm,
-        )
-        
-        admin_task = Task(
-            description=f"Strictly evaluate the customer's data against the decision rules provided in the prompt. {prompt}",
-            expected_output="A single JSON object: {\"decision\":\"APPROVE|REVIEW|REJECT\",\"reason\":\"string\"}",
-            agent=admin_agent,
-        )
-        
-        crew = Crew(agents=[admin_agent], tasks=[admin_task], verbose=False)
-        result = crew.kickoff()
-        assistant_reply = str(result)
-        
-        import json as _json
-        try:
-            parsed = _json.loads(assistant_reply)
-        except Exception:
-            return {"status":"ok", "agent_reply": assistant_reply, "note":"agent output not valid JSON; decision not saved"}
-        if isinstance(parsed, dict) and parsed.get("decision") and parsed.get("reason"):
-            saved = record_decision(customer_id, parsed["decision"], parsed["reason"])
-            return {"status":"ok", "agent_decision": parsed, "saved": saved}
-        else:
-            return {"status":"ok", "agent_reply": assistant_reply, "note":"agent output did not match expected decision shape"}
-    except Exception as exc:
-        tb = traceback.format_exc()
-        print(tb)
-        raise HTTPException(status_code=500, detail=f"failed to run agent: {str(exc)}")
+
+
+@app.get("/decisions")
+def get_decision():
+    return _load_decisions()
 
 @app.get("/_dev/reload-sources")
 def dev_reload_sources():

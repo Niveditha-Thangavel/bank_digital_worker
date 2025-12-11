@@ -12,59 +12,79 @@ interface Message {
   content: string;
 }
 
-/* ---------- 🧠 EXTRACT DATA FROM PLAIN TEXT ---------- */
-function extractDecisionData(text: string) {
-  const id = text.match(/ID[:\s]+([A-Za-z0-9]+)/i)?.[1];
-  const customerId =
-    text.match(/CustomerID[:\s]+([A-Za-z0-9]+)/i)?.[1] ||
-    text.match(/Customer\s+([A-Za-z0-9]+)/i)?.[1];
-  const decision = text.match(/Decision[:\s]+([A-Za-z]+)/i)?.[1];
-  const reason = text.match(/Reason[:\s]+(.+)/i)?.[1];
+/* ------------------------- 🧠 PARSE MARKDOWN TABLE ------------------------ */
+function parseMarkdownTable(text: string) {
+  if (!text.includes("|")) return null;
 
-  if (id && customerId && decision && reason) {
-    return { id, customerId, decision, reason };
-  }
-  return null;
+  const lines = text.trim().split("\n").filter(line => line.includes("|"));
+
+  if (lines.length < 3) return null;
+
+  const headers = lines[0]
+    .split("|")
+    .map(h => h.trim())
+    .filter(Boolean);
+
+  const rows = lines.slice(2).map(row =>
+    row
+      .split("|")
+      .map(col => col.trim())
+      .filter(Boolean)
+  );
+
+  return rows.map((cols) => ({
+    id: cols[0],
+    customerId: cols[1],
+    decision: cols[2],
+    reason: cols[3]
+  }));
 }
 
-/* ---------- 📦 CUSTOM TABLE UI ---------- */
-function DecisionCard({ data }: any) {
-  const [showReason, setShowReason] = useState(false);
+/* ------------------------- 📦 CUSTOM TABLE ROW UI ------------------------- */
+function DecisionTable({ rows }: any) {
+  const [openRow, setOpenRow] = useState<string | null>(null);
 
   return (
     <div className="border rounded-md p-3 bg-background text-sm shadow-sm space-y-3">
-      <table className="w-full text-left text-sm">
+      <table className="w-full text-left text-sm border-collapse">
+        <thead>
+          <tr className="border-b">
+            <th className="py-1 font-semibold">Customer ID</th>
+            <th className="py-1 font-semibold">Decision</th>
+            <th className="py-1 font-semibold">Reason</th>
+          </tr>
+        </thead>
         <tbody>
-          <tr>
-            <td className="font-semibold w-32">ID</td>
-            <td>{data.id}</td>
-          </tr>
-          <tr>
-            <td className="font-semibold">Customer ID</td>
-            <td>{data.customerId}</td>
-          </tr>
-          <tr>
-            <td className="font-semibold">Decision</td>
-            <td>{data.decision}</td>
-          </tr>
+          {rows.map((row: any) => (
+            <>
+              <tr key={row.id} className="border-b">
+                <td className="py-2">{row.customerId}</td>
+                <td className="py-2">{row.decision}</td>
+                <td className="py-2">
+                  <button
+                    className="text-primary underline text-xs"
+                    onClick={() => setOpenRow(openRow === row.id ? null : row.id)}
+                  >
+                    {openRow === row.id ? "Hide Reason" : "View Reason"}
+                  </button>
+                </td>
+              </tr>
+              {openRow === row.id && (
+                <tr>
+                  <td colSpan={4} className="p-3 bg-muted rounded text-xs">
+                    {row.reason}
+                  </td>
+                </tr>
+              )}
+            </>
+          ))}
         </tbody>
       </table>
-
-      <button
-        className="text-primary underline text-xs"
-        onClick={() => setShowReason((prev) => !prev)}
-      >
-        {showReason ? "Hide Reason" : "View Reason"}
-      </button>
-
-      {showReason && (
-        <div className="p-2 border rounded text-xs bg-muted">
-          {data.reason}
-        </div>
-      )}
     </div>
   );
 }
+
+/* ------------------------- FLOATING ASSISTANT ------------------------- */
 
 export function FloatingAIAssistant() {
   const [isOpen, setIsOpen] = useState(false);
@@ -78,13 +98,13 @@ export function FloatingAIAssistant() {
 
     const userMessage = input.trim();
     setInput('');
-    setMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
+    setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
     setIsLoading(true);
 
     try {
       const response = await sendChatMessage(userMessage, undefined, sessionId);
       setSessionId(response.session_id);
-      setMessages((prev) => [...prev, { role: 'assistant', content: response.reply }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: response.reply }]);
     } catch (error) {
       toast.error('Failed to get response from AI');
       console.error(error);
@@ -139,19 +159,24 @@ export function FloatingAIAssistant() {
             )}
 
             {messages.map((msg, i) => {
-              const structured = msg.role === "assistant" ? extractDecisionData(msg.content) : null;
+              const parsedRows =
+                msg.role === "assistant" ? parseMarkdownTable(msg.content) : null;
 
               return (
                 <div
                   key={i}
                   className={cn(
                     "max-w-[80%] p-3 rounded-lg text-sm",
-                    msg.role === "user"
+                    msg.role === 'user'
                       ? "ml-auto bg-primary text-primary-foreground"
                       : "bg-muted text-foreground"
                   )}
                 >
-                  {structured ? <DecisionCard data={structured} /> : msg.content}
+                  {parsedRows ? (
+                    <DecisionTable rows={parsedRows} />
+                  ) : (
+                    msg.content
+                  )}
                 </div>
               );
             })}

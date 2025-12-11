@@ -154,7 +154,7 @@ export default function AdminDecisions() {
                     <div>
                       <h4 className="font-medium text-foreground">{customerId}</h4>
                       <p className="text-sm text-muted-foreground">
-                        Updated: {new Date(decision.updated_at).toLocaleString()}
+                        Updated: {new Date(decision.created_at).toLocaleString()}
                       </p>
                     </div>
                   </div>

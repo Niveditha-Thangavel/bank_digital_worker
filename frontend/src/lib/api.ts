@@ -13,14 +13,17 @@ export interface ChatResponse {
 }
 
 export interface Decision {
+  customer_id: string; 
   decision: 'APPROVE' | 'REJECT' | 'REVIEW';
   reason: string;
-  updated_at: string;
+  created_at: string;
 }
 
 export interface DecisionsMap {
   [customerId: string]: Decision;
 }
+
+
 
 export async function sendChatMessage(
   message: string,
@@ -51,9 +54,24 @@ export async function getDecisions(): Promise<DecisionsMap> {
   if (!response.ok) {
     throw new Error(`Failed to fetch decisions: ${response.statusText}`);
   }
+
   const data = await response.json();
-  return data.decisions || {};
+
+  const arr = data.decisions || [];
+  const map: DecisionsMap = {};
+
+  for (const d of arr) {
+    map[d.customer_id] = {
+      customer_id: d.customer_id,
+      decision: d.decision,
+      reason: d.reason,
+      created_at: d.created_at,
+    };
+  }
+
+  return map;
 }
+
 
 export async function updateDecision(
   customerId: string,
