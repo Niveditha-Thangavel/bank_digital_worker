@@ -2,14 +2,15 @@
 import os
 from typing import Any, Dict, List, Optional
 from supabase import create_client
+from dotenv import load_dotenv
 
+load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("Set SUPABASE_URL and SUPABASE_KEY environment variables (use https://<project>.supabase.co and the secret key).")
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 
 def _normalize_resp(resp: Any, table: str = "<unknown>") -> List[Dict[str, Any]]:
     """

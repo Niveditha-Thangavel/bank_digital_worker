@@ -4,52 +4,46 @@
       "customer_id": "C101",
       "transactions": [
         {
-          "date": "2025-11-01",
-          "amount": 5000,
-          "type": "credit",
-          "description": "Salary"
-        },
-        {
-          "date": "2025-11-02",
-          "amount": 600,
+          "date": "2025-11-15",
+          "amount": 700.0,
           "type": "debit",
-          "description": "Grocery"
-        },
-        {
-          "date": "2025-11-03",
-          "amount": 1200,
-          "type": "debit",
-          "description": "Electronics"
-        },
-        {
-          "date": "2025-11-05",
-          "amount": 300,
-          "type": "debit",
-          "description": "Transport"
-        },
-        {
-          "date": "2025-11-08",
-          "amount": 850,
-          "type": "debit",
-          "description": "Shopping"
-        },
-        {
-          "date": "2025-11-10",
-          "amount": 1000,
-          "type": "credit",
-          "description": "Freelance Income"
+          "description": "Utilities"
         },
         {
           "date": "2025-11-12",
-          "amount": 400,
+          "amount": 400.0,
           "type": "debit",
           "description": "Dining"
         },
         {
-          "date": "2025-11-15",
-          "amount": 700,
+          "date": "2025-11-10",
+          "amount": 1000.0,
+          "type": "credit",
+          "description": "Freelance Income"
+        },
+        {
+          "date": "2025-11-08",
+          "amount": 850.0,
           "type": "debit",
-          "description": "Utilities"
+          "description": "Shopping"
+        },
+        {
+          "date": "2025-11-05",
+          "amount": 300.0,
+          "type": "debit",
+          "description": "Transport"
+        },
+        {
+          "date": "2025-11-03",
+          "amount": 1200.0,
+          "type": "debit",
+          "description": "Electronics"
+        },
+        {
+          "date": "2025-11-02",
+          "amount": 600.0,
+          "type": "debit",
+          "description": "Grocery"
         }
       ]
     },

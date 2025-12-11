@@ -1,30 +1,127 @@
-# backend.py
-"""
-Banking Agent Backend (FastAPI) with Supabase integration.
-Improvements:
-- Added endpoints required by frontend (GET/POST customer, decisions update/list, api-status)
-- Better error handling and API status indicator
-- Upsert logic for POST /customer to load nested records (credit_cards, billing_cycles, loans, transactions)
-Run:
-    uvicorn backend:app --reload
-"""
 import os
+import json
 import uuid
 import traceback
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Body, Header, Path, Query
+from fastapi import FastAPI, HTTPException, Body, Query
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+from threading import Lock
+from io import StringIO
+import csv
+import html
 
-# Supabase client
-try:
-    from supabase import create_client
-except Exception as e:
-    raise RuntimeError("supabase client not found. Install with: pip install supabase") from e
+load_dotenv()
 
-# Optional Crew/Agent imports (only used if available)
+BANK_STATEMENTS_FILE = "bank_statements.json"
+CREDITS_LOAN_FILE = "credits_loan.json"
+DECISIONS_FILE = "decisions.json"
+
+if not os.path.exists(DECISIONS_FILE):
+    with open(DECISIONS_FILE, "w", encoding="utf-8") as f:
+        json.dump([], f, indent=2)
+
+_file_lock = Lock()
+
+def _read_json_file(path: str) -> Any:
+    if not os.path.exists(path):
+        return {}
+    with _file_lock:
+        with open(path, "r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except Exception:
+                return {}
+
+def _write_json_file(path: str, data: Any):
+    with _file_lock:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, default=str)
+
+def _load_bank_statements() -> List[Dict[str, Any]]:
+    data = _read_json_file(BANK_STATEMENTS_FILE)
+    return data.get("bank_statements", []) if isinstance(data, dict) else []
+
+def _load_customer_accounts() -> List[Dict[str, Any]]:
+    data = _read_json_file(CREDITS_LOAN_FILE)
+    return data.get("customer_accounts", []) if isinstance(data, dict) else []
+
+def _load_decisions() -> List[Dict[str, Any]]:
+    data = _read_json_file(DECISIONS_FILE)
+    return data if isinstance(data, list) else []
+
+def _append_decision(decision_obj: Dict[str, Any]) -> Dict[str, Any]:
+    decisions = _load_decisions()
+    decisions.append(decision_obj)
+    _write_json_file(DECISIONS_FILE, decisions)
+    return decision_obj
+
+def list_customers() -> List[Dict[str, Any]]:
+    return _load_customer_accounts()
+
+def get_customer(customer_id: str) -> Optional[Dict[str, Any]]:
+    customers = _load_customer_accounts()
+    for c in customers:
+        if c.get("customer_id") == customer_id:
+            return dict(c)
+    return None
+
+def get_transactions(customer_id: str, limit: int = 200) -> List[Dict[str, Any]]:
+    bank_stmts = _load_bank_statements()
+    for entry in bank_stmts:
+        if entry.get("customer_id") == customer_id:
+            txs = entry.get("transactions", [])
+            try:
+                txs_sorted = sorted(txs, key=lambda x: x.get("date") or "", reverse=True)
+            except Exception:
+                txs_sorted = list(txs)
+            return txs_sorted[:limit]
+    return []
+
+def get_credit_cards(customer_id: str) -> List[Dict[str, Any]]:
+    cust = get_customer(customer_id)
+    if not cust:
+        return []
+    return cust.get("credit_cards", []) or []
+
+def get_loans(customer_id: str) -> List[Dict[str, Any]]:
+    cust = get_customer(customer_id)
+    if not cust:
+        return []
+    return cust.get("loans", []) or []
+
+def list_decisions(customer_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    all_dec = _load_decisions()
+    if customer_id:
+        filtered = [d for d in all_dec if d.get("customer_id") == customer_id]
+    else:
+        filtered = all_dec
+    try:
+        filtered_sorted = sorted(filtered, key=lambda x: x.get("created_at", ""), reverse=True)
+    except Exception:
+        filtered_sorted = filtered
+    return filtered_sorted[:limit]
+
+def record_decision(customer_id: str, decision: str, reason: str) -> Dict[str, Any]:
+    obj = {
+        "id": str(uuid.uuid4()),
+        "customer_id": customer_id,
+        "decision": decision,
+        "reason": reason,
+        "created_at": datetime.utcnow().isoformat()
+    }
+    return _append_decision(obj)
+
+def reload_sources():
+    return {
+        "bank_statements_count": len(_load_bank_statements()),
+        "customer_accounts_count": len(_load_customer_accounts()),
+        "decisions_count": len(_load_decisions()),
+    }
+
 try:
     from crewai import Agent, Crew, LLM, Task
     from crewai.tools import BaseTool
@@ -32,329 +129,86 @@ try:
 except Exception:
     CREW_AVAILABLE = False
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 LLM_API_KEY = os.getenv("LLM_API_KEY")
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError("Set SUPABASE_URL and SUPABASE_KEY environment variables")
+if CREW_AVAILABLE:
+    class FetchTool(BaseTool):
+        name: str = "CustomerDataTool"
+        description: str = "Provides the customer's data summary and full profile is available in the chat context if customer_id is set. Do not call with customer_id argument."
+
+        def _run(self, *args, **kwargs):
+            return "Customer's data summary and full profile (transactions, credit, loans) are available in the chat context if customer_id was provided."
+
+    class RulesTool(BaseTool):
+        name: str = "RulesProvider"
+        description: str = "Provides the complete rule-set text to check eligibility of loan."
+
+        def _run(self, *args, **kwargs):
+            return DEFAULT_RULES_TEXT
+        
+    class FetchdecTool(BaseTool):
+        name: str = "FetchDecisions"
+        description: str = "Fetch all the decisions from decisions.json as a JSON string. Can be filtered by customer_id."
+
+        def _run(self):
+            decisions = _load_decisions()
+            return json.dumps(decisions)
+        
+
+
+    class update_decisionTool(BaseTool):
+        name:str = "UpdateDecisionTool"
+        description:str = "Update the decision of customer id "
+        def _run(self,customer_id:str,decision:str,reason:str):
+            with open(DECISIONS_FILE) as f:
+                data = json.load(f)
+                for i in data:
+                    if i["customer_id"] == customer_id:
+                        pass
+
+
+
+
+    def build_crew(prompt: str, role: str = "customer", tools: Optional[List[BaseTool]] = None) -> Crew:
+        llm = LLM(model="gemini/gemini-2.5-flash", api_key=LLM_API_KEY) if LLM_API_KEY else LLM()
+        
+        if role == "admin":
+            tool_list = [FetchdecTool(),FetchTool()]
+            agent_goal = f"Provide answers and all requested details in a clean, comprehensive, professional format based on the prompt: '{prompt}'. Always use FetchDecisions tool if the request is about decisions."
+            agent_backstory = "Expert in providing comprehensive analysis and detailed data access to administrators. You have full access to all historical decisions via the FetchDecisions tool."
+            task_description = (
+                "You are operating in Admin mode. Answer questions and accomplish the task using the available tools as the answer "
+                "Use the FetchDecisions tool to fetch all decisions. Parse the JSON output from the tool and **format the result ONLY as a clean, structured Markdown table** (including ID, Customer ID, Decision, and Reason). **Do not include any text, headers, or footers before or after the table**. "  
+                "Provide all details for the admin in a clean, structured format."
+            )
+            expected_output = "A sentence with clean Markdown table showing all decisions, or the required JSON object for evaluation, or a professional, detailed answer."
+        else:
+            tool_list = [FetchTool(), RulesTool()]
+            agent_goal = f"Provide details and chats in a friendly way and accomplish the task in '{prompt}'"
+            agent_backstory = "Expert in answering customer questions, providing friendly explanations, and completing the right task using the right tool. You have access to the customer's summary and profile when a customer_id is set. You CANNOT access other customer's data."
+            task_description = (
+                "Chat with the user in a friendly manner. "
+                "Answer questions and accomplish the task using the available tools. "
+                "Use the RulesProvider to fetch decision rules when an eligibility check is requested. "
+                "Use the CustomerDataTool as a reference that you have access to the customer's data. If customer_id is not provided, you cannot access account details. If unable to answer, apologize and tell that you will come back soon, also thank them for their patience. Provide only their details to the customer, by using their customer id."
+            )
+            expected_output = "User friendly answer to the question (no json)."
+
+        chatbot = Agent(
+            role="Chatbot",
+            goal=agent_goal,
+            backstory=agent_backstory,
+            tools=tool_list,
+            llm=llm,
+        )
+        
+        chatbot_task = Task(
+            description=task_description,
+            expected_output=expected_output,
+            agent=chatbot,
+        )
+        return Crew(agents=[chatbot], tasks=[chatbot_task], verbose=False)
 
-sb = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-app = FastAPI(title="Banking Agent API (Supabase)")
-
-# Allow local frontend (vite) + adjust as needed
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],               # quick dev convenience
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# --- Simple server-side token auth (dev) ---
-_tokens: Dict[str, Dict[str, str]] = {}  # token -> {"role": "admin"|"customer", "id": customer_id or admin_email}
-
-
-def create_token(role: str, id_value: Optional[str] = None) -> str:
-    t = str(uuid.uuid4())
-    _tokens[t] = {"role": role, "id": id_value or ""}
-    return t
-
-
-def validate_token(token_header: Optional[str]) -> Optional[Dict[str, str]]:
-    """
-    Accept either raw token or 'Bearer <token>' header form.
-    Returns token metadata dict from _tokens or None.
-    """
-    if not token_header:
-        # no header supplied
-        return None
-
-    token = token_header
-
-    # If the header is "Bearer <token>", strip the prefix (case-insensitive)
-    if isinstance(token, str) and token.lower().startswith("bearer "):
-        token = token.split(" ", 1)[1].strip()
-
-    # Simple debug logging to help you see what arrived (remove or lower in production)
-    try:
-        print(f"[auth] validate_token called with token_header='{token_header}' -> token='{token[:8]}...'")
-    except Exception:
-        pass
-
-    return _tokens.get(token)
-
-
-
-
-# --- Pydantic models for request/response validation ---
-class AuthRequest(BaseModel):
-    role: str = Field(..., description="customer|admin")
-    customer_id: Optional[str] = None
-    email: Optional[str] = None
-    password: Optional[str] = None  # dev-only
-
-
-class AuthResponse(BaseModel):
-    token: str
-    role: str
-    id: Optional[str] = None
-
-
-class TransactionIn(BaseModel):
-    tx_id: Optional[str] = None
-    customer_id: str
-    date: Optional[datetime] = None
-    amount: float
-    type: str  # "credit" or "debit"
-    description: Optional[str] = None
-
-
-class CreditCardIn(BaseModel):
-    card_id: Optional[str] = None
-    card_number: Optional[str] = None  # accept either
-    customer_id: str
-    credit_limit: float
-    current_balance: float
-
-
-class BillingCycleIn(BaseModel):
-    card_id: str
-    cycle_start: str
-    cycle_end: str
-    amount_due: float
-    amount_paid: float
-    payment_date: Optional[str] = None
-
-
-class LoanIn(BaseModel):
-    loan_id: Optional[str] = None
-    customer_id: str
-    principal_amount: Optional[float] = None
-    outstanding_amount: Optional[float] = None
-    monthly_due: Optional[float] = None
-    loan_type: Optional[str] = None
-
-
-class CustomerIn(BaseModel):
-    customer_id: Optional[str] = None
-    name: str
-    email: Optional[str] = None
-    account_creation_date: Optional[str] = None
-
-
-class ChatRequest(BaseModel):
-    message: str
-    customer_id: Optional[str] = None
-    session_id: Optional[str] = None
-    end_session: Optional[bool] = False
-    role: Optional[str] = "customer"
-
-
-# --- Helper: normalize Supabase APIResponse shapes ---
-def _normalize_resp(resp: Any, table: str = "<unknown>"):
-    data = getattr(resp, "data", None)
-    if data is not None:
-        return data
-    try:
-        if isinstance(resp, dict) and "data" in resp:
-            return resp["data"]
-    except Exception:
-        pass
-    try:
-        getter = getattr(resp, "get", None)
-        if callable(getter):
-            d = resp.get("data")
-            if d is not None:
-                return d
-    except Exception:
-        pass
-    raise RuntimeError(f"Unexpected supabase response for table '{table}': {repr(resp)}")
-
-
-# --- Safe wrappers for common DB operations ---
-def safe_select(table: str, select: str = "*", filters: Optional[Dict[str, Any]] = None, limit: Optional[int] = None, order: Optional[Dict[str, Any]] = None):
-    try:
-        q = sb.table(table).select(select)
-        if filters:
-            for k, v in filters.items():
-                if v is None:
-                    continue
-                q = q.eq(k, v)
-        if order:
-            if isinstance(order, dict):
-                for col, opts in order.items():
-                    if isinstance(opts, dict):
-                        asc = opts.get("ascending", True)
-                        q = q.order(col, {"ascending": asc})
-        if limit:
-            q = q.limit(limit)
-        resp = q.execute()
-    except Exception as e:
-        raise RuntimeError(f"Supabase request failed for select on '{table}': {e}")
-    return _normalize_resp(resp, table)
-
-
-def safe_insert(table: str, payload: Any):
-    try:
-        resp = sb.table(table).insert(payload).execute()
-    except Exception as e:
-        raise RuntimeError(f"Supabase insert failed for '{table}': {e}")
-    return _normalize_resp(resp, table)
-
-
-def safe_update(table: str, payload: Any, match_key: str, match_value: Any):
-    try:
-        resp = sb.table(table).update(payload).eq(match_key, match_value).execute()
-    except Exception as e:
-        raise RuntimeError(f"Supabase update failed for '{table}': {e}")
-    return _normalize_resp(resp, table)
-
-
-def safe_delete(table: str, match_key: str, match_value: Any):
-    try:
-        resp = sb.table(table).delete().eq(match_key, match_value).execute()
-    except Exception as e:
-        raise RuntimeError(f"Supabase delete failed for '{table}': {e}")
-    return _normalize_resp(resp, table)
-
-
-# --- Business helpers (use safe wrappers) ---
-def get_customer(customer_id: str) -> Optional[Dict[str, Any]]:
-    rows = safe_select("customers", "*", filters={"customer_id": customer_id}, limit=1)
-    return rows[0] if rows else None
-
-
-def create_customer(payload: Dict[str, Any]) -> Dict[str, Any]:
-    data = payload.copy()
-    if not data.get("customer_id"):
-        data["customer_id"] = str(uuid.uuid4())
-    if "created_at" not in data:
-        data["created_at"] = datetime.utcnow().isoformat()
-    rows = safe_insert("customers", data)
-    return rows[0] if rows else {}
-
-
-def list_customers(limit: int = 100) -> List[Dict[str, Any]]:
-    return safe_select("customers", "*", limit=limit, order={"created_at": {"ascending": False}})
-
-
-def get_transactions(customer_id: str, limit: int = 200) -> List[Dict[str, Any]]:
-    return safe_select("transactions", "*", filters={"customer_id": customer_id}, limit=limit, order={"date": {"ascending": False}})
-
-
-def add_transaction(tx: Dict[str, Any]) -> Dict[str, Any]:
-    t = tx.copy()
-    if not t.get("tx_id"):
-        # create deterministic tx_id if possible, but fallback to uuid
-        tx_id = t.get("tx_id")
-        if not tx_id:
-            tx_key = f"{t.get('customer_id')}::{t.get('date')}::{t.get('amount')}::{t.get('description') or ''}"
-            t["tx_id"] = tx_key
-    if not t.get("date"):
-        t["date"] = datetime.utcnow().isoformat()
-    rows = safe_insert("transactions", t)
-    return rows[0] if rows else {}
-
-
-def get_credit_cards(customer_id: str) -> List[Dict[str, Any]]:
-    return safe_select("credit_cards", "*", filters={"customer_id": customer_id})
-
-
-def add_credit_card(card: Dict[str, Any]) -> Dict[str, Any]:
-    c = card.copy()
-    if not c.get("card_id"):
-        # prefer card_number as card_id if present
-        c["card_id"] = c.get("card_id") or c.get("card_number") or str(uuid.uuid4())
-    rows = safe_insert("credit_cards", c)
-    return rows[0] if rows else {}
-
-
-def get_loans(customer_id: str) -> List[Dict[str, Any]]:
-    return safe_select("loans", "*", filters={"customer_id": customer_id})
-
-
-def add_loan(loan: Dict[str, Any]) -> Dict[str, Any]:
-    l = loan.copy()
-    if not l.get("loan_id"):
-        l["loan_id"] = str(uuid.uuid4())
-    rows = safe_insert("loans", l)
-    return rows[0] if rows else {}
-
-
-def get_latest_rules() -> Optional[Dict[str, Any]]:
-    rows = safe_select("rules", "*", limit=1, order={"updated_at": {"ascending": False}})
-    return rows[0] if rows else None
-
-
-def upsert_rules(rules_text: str) -> Dict[str, Any]:
-    payload = {"rules_text": rules_text, "updated_at": datetime.utcnow().isoformat()}
-    rows = safe_insert("rules", payload)
-    return rows[0] if rows else {}
-
-
-def record_decision(customer_id: str, decision: str, reason: str) -> Dict[str, Any]:
-    payload = {
-        "customer_id": customer_id,
-        "decision": decision,
-        "reason": reason,
-        "created_at": datetime.utcnow().isoformat()
-    }
-    rows = safe_insert("loan_decisions", payload)
-    return rows[0] if rows else {}
-
-
-def update_decision_row(decision_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
-    rows = safe_update("loan_decisions", payload, "id", decision_id)
-    return rows[0] if rows else {}
-
-
-def list_decisions(customer_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
-    filters = {"customer_id": customer_id} if customer_id else None
-    rows = safe_select("loan_decisions", "*", filters=filters, limit=limit, order={"created_at": {"ascending": False}})
-    return rows
-
-
-def list_notifications(limit: int = 100) -> List[Dict[str, Any]]:
-    return safe_select("notifications", "*", limit=limit, order={"created_at": {"ascending": False}})
-
-
-def post_notification(title: str, body: str, level: str = "info") -> Dict[str, Any]:
-    payload = {"title": title, "body": body, "level": level, "created_at": datetime.utcnow().isoformat()}
-    rows = safe_insert("notifications", payload)
-    return rows[0] if rows else {}
-
-
-def get_setting(key: str) -> Optional[Dict[str, Any]]:
-    rows = safe_select("settings", "*", filters={"key": key}, limit=1)
-    return rows[0] if rows else None
-
-
-def upsert_setting(key: str, value: Any) -> Dict[str, Any]:
-    payload = {"key": key, "value": value, "updated_at": datetime.utcnow().isoformat()}
-    rows = safe_insert("settings", payload)
-    return rows[0] if rows else {}
-
-
-# Sessions: in-memory with optional persistence
-_sessions_in_memory: Dict[str, List[Dict[str, str]]] = {}
-_sessions_history_in_memory: Dict[str, List[List[Dict[str, str]]]] = {}
-
-
-def save_session_to_db(session_id: str, session_data: List[Dict[str, Any]]):
-    payload = {"session_id": session_id, "data": session_data, "updated_at": datetime.utcnow().isoformat()}
-    try:
-        safe_insert("sessions", payload)
-    except Exception:
-        pass
-
-
-def archive_session_in_db(session_id: str):
-    pass
-
-
-# --- Crew/Agent integration: omitted for brevity (same as you had) ---
 DEFAULT_RULES_TEXT = (
     "Rules:\n"
     "1. Income Check: Income must be ≥ ₹20,000 per month\n"
@@ -375,265 +229,84 @@ DEFAULT_RULES_TEXT = (
     'OUTPUT REQUIREMENT: Return exactly the JSON object {"decision":"APPROVE|REVIEW|REJECT","reason":"string"} and NOTHING else.'
 )
 
-if CREW_AVAILABLE:
-    class FetchTool(BaseTool):
-        name: str = "FetchBankStatement"
-        description: str = "Fetch the bank statement and credit/loan profile for a specific customer_id"
+app = FastAPI(title="Banking Agent (JSON DB) - No Auth Mode")
 
-        def _run(self, customer_id: str):
-            cust = get_customer(customer_id)
-            if not cust:
-                return {"error": f"Customer {customer_id} not found"}
-            transactions = get_transactions(customer_id, limit=200)
-            cards = get_credit_cards(customer_id)
-            loans = get_loans(customer_id)
-            return {
-                "customer": cust,
-                "transactions": transactions,
-                "credit_cards": cards,
-                "loans": loans,
-            }
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    class RulesTool(BaseTool):
-        name: str = "Rules provider"
-        description: str = "Provides the rule-set text to check eligibility of loan"
+class ChatRequest(BaseModel):
+    message: str
+    customer_id: Optional[str] = None
+    session_id: Optional[str] = None
+    end_session: Optional[bool] = False
+    role: Optional[str] = "customer"
 
-        def _run(self, *args, **kwargs):
-            r = get_latest_rules()
-            return r["rules_text"] if r and r.get("rules_text") else DEFAULT_RULES_TEXT
+_sessions_in_memory: Dict[str, List[Dict[str, Any]]] = {}
+_sessions_history_in_memory: Dict[str, List[List[Dict[str, Any]]]] = {}
 
-    def build_crew(prompt: str) -> Crew:
-        llm = LLM(model="gemini/gemini-2.5-flash", api_key=LLM_API_KEY)
-        chatbot = Agent(
-            role="Chatbot",
-            goal=f"Answer and accomplish the task in '{prompt}'",
-            backstory="Expert in answering questions and completing the right task using the right tool",
-            tools=[FetchTool(), RulesTool()],
-            llm=llm,
-        )
-        chatbot_task = Task(
-            description=(
-                "Answer questions and accomplish the task using the available tools. "
-                "Use FetchBankStatement to fetch customer's data and Rules provider to fetch decision rules."
-            ),
-            expected_output="Answer with correct tool usage and conclusions",
-            agent=chatbot,
-        )
-        return Crew(agents=[chatbot], tasks=[chatbot_task], verbose=False)
+def _get_customer_name(customer_id: Optional[str]) -> str:
+    if not customer_id:
+        return "(Unknown Customer)"
+    cust = get_customer(customer_id)
+    if not cust:
+        return "(Unknown Customer)"
+    return cust.get("name") or "(Unknown Customer)"
 
+def _escape_pipe(text: str) -> str:
+    return str(text).replace("|", "\\|")
 
-# --- API endpoints ---
+def _decisions_to_markdown_table(decisions: List[Dict[str, Any]]) -> str:
+    headers = ["ID", "Customer ID", "Customer Name", "Decision", "Reason", "Created At"]
+    lines = []
+    lines.append("| " + " | ".join(headers) + " |")
+    lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+    for d in decisions:
+        row = [
+            _escape_pipe(d.get("id", "")),
+            _escape_pipe(d.get("customer_id", "")),
+            _escape_pipe(d.get("customer_name", "")),
+            _escape_pipe(d.get("decision", "")),
+            _escape_pipe(d.get("reason", "")),
+            _escape_pipe(d.get("created_at", "")),
+        ]
+        lines.append("| " + " | ".join(row) + " |")
+    return "\n".join(lines)
+
+def _decisions_to_csv(decisions: List[Dict[str, Any]]) -> str:
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["id", "customer_id", "customer_name", "decision", "reason", "created_at"])
+    for d in decisions:
+        writer.writerow([d.get("id",""), d.get("customer_id",""), d.get("customer_name",""), d.get("decision",""), d.get("reason",""), d.get("created_at","")])
+    return output.getvalue()
+
 @app.get("/health")
 def health():
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
 
-
 @app.get("/health/full")
 def health_full():
     try:
-        _ = sb.table("customers").select("customer_id").limit(1).execute()
-        return {"status": "ok", "supabase_connected": True}
-    except Exception as exc:
-        return {"status": "ok", "supabase_connected": False, "error": str(exc)}
+        bank_count = len(_load_bank_statements())
+        cust_count = len(_load_customer_accounts())
+        dec_count = len(_load_decisions())
+        return {"status": "ok", "bank_statements": bank_count, "customer_accounts": cust_count, "decisions": dec_count}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
-
-# --- Auth (dev) ---
-@app.post("/auth", response_model=AuthResponse)
-def auth(req: AuthRequest):
-    role = req.role.lower()
-    if role == "customer":
-        if not req.customer_id:
-            raise HTTPException(status_code=400, detail="customer_id required for role=customer")
-        cust = get_customer(req.customer_id)
-        if not cust:
-            raise HTTPException(status_code=404, detail="customer not found")
-        token = create_token("customer", req.customer_id)
-        return {"token": token, "role": "customer", "id": req.customer_id}
-    elif role == "admin":
-        if not req.email:
-            raise HTTPException(status_code=400, detail="email required for admin login")
-        token = create_token("admin", req.email)
-        return {"token": token, "role": "admin", "id": req.email}
-    else:
-        raise HTTPException(status_code=400, detail="unknown role")
-
-
-# --- Customers CRUD & frontend-shaped endpoints ---
 @app.get("/customers")
-def api_list_customers(limit: int = 100, authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    rows = list_customers(limit)
-    return {"status": "ok", "customers": rows}
-
+def api_list_customers():
+    customers = list_customers()
+    summary = [{"customer_id": c.get("customer_id"), "account_creation_date": c.get("account_creation_date"), "name": c.get("name")} for c in customers]
+    return {"status": "ok", "customers": summary}
 
 @app.get("/customer/{customer_id}")
-def api_get_customer_front(customer_id: str, authorization: Optional[str] = Header(None)):
-    """
-    Frontend-friendly customer endpoint (public name /customer/{id}).
-    Returns customer meta, transactions, credit_cards, loans, decisions.
-    """
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    try:
-        cust = get_customer(customer_id)
-        if not cust:
-            raise HTTPException(status_code=404, detail="customer not found")
-        txs = get_transactions(customer_id, limit=500)
-        cards = get_credit_cards(customer_id)
-        loans = get_loans(customer_id)
-        decisions = list_decisions(customer_id, limit=100)
-        return {"status": "ok", "customer": cust, "transactions": txs, "credit_cards": cards, "loans": loans, "decisions": decisions}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/customer")
-def api_create_or_update_customer(payload: Dict[str, Any] = Body(...), authorization: Optional[str] = Header(None)):
-    """
-    Upsert customer and nested records.
-    Expect payload with fields similar to:
-    {
-      "customer_id": "C101",
-      "name": "Alice",
-      "email": "...",
-      "account_creation_date": "...",
-      "credit_cards": [...],
-      "loans": [...],
-      "transactions": [...]  // optional flat list
-    }
-    Or you can POST the whole 'customer_accounts' object (array). This endpoint supports both single object and wrapper.
-    """
-    token_meta = validate_token(authorization)
-    if token_meta is None or token_meta.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="admin token required")
-
-    body = payload
-    # support wrapper: {"customer_accounts": [...]} or direct single object
-    try:
-        if isinstance(body, dict) and "customer_accounts" in body:
-            items = body.get("customer_accounts", [])
-            results = []
-            for cust in items:
-                results.append(_upsert_full_customer(cust))
-            return {"status": "ok", "imported": results}
-        else:
-            res = _upsert_full_customer(body)
-            return {"status": "ok", "customer": res}
-    except HTTPException:
-        raise
-    except Exception as e:
-        tb = traceback.format_exc()
-        print(tb)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-def _upsert_full_customer(cust_obj: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Internal helper: upsert customer, credit_cards (and billing_cycles), loans, transactions.
-    """
-    cid = cust_obj.get("customer_id") or str(uuid.uuid4())
-    # Customer upsert: try select, then update or insert
-    existing = safe_select("customers", "*", filters={"customer_id": cid}, limit=1)
-    base_payload = {
-        "customer_id": cid,
-        "name": cust_obj.get("name"),
-        "email": cust_obj.get("email"),
-        "account_creation_date": cust_obj.get("account_creation_date") or cust_obj.get("account_creation_date")
-    }
-    if existing:
-        safe_update("customers", base_payload, "customer_id", cid)
-    else:
-        safe_insert("customers", base_payload)
-
-    # credit cards and billing cycles
-    for card in cust_obj.get("credit_cards", []):
-        # normalize card id
-        card_id = card.get("card_number") or card.get("card_id") or str(uuid.uuid4())
-        card_payload = {
-            "card_id": card_id,
-            "card_number": card.get("card_number"),
-            "customer_id": cid,
-            "credit_limit": card.get("credit_limit"),
-            "current_balance": card.get("current_balance"),
-        }
-        # upsert credit_cards by card_id
-        existing_card = safe_select("credit_cards", "*", filters={"card_id": card_id}, limit=1)
-        if existing_card:
-            safe_update("credit_cards", card_payload, "card_id", card_id)
-        else:
-            safe_insert("credit_cards", card_payload)
-
-        # billing cycles table (if present)
-        for cyc in card.get("billing_cycles", []):
-            bc = {
-                "card_id": card_id,
-                "cycle_start": cyc.get("cycle_start"),
-                "cycle_end": cyc.get("cycle_end"),
-                "amount_due": cyc.get("amount_due"),
-                "amount_paid": cyc.get("amount_paid"),
-                "payment_date": cyc.get("payment_date"),
-            }
-            # check if cycle exists (card_id + cycle_start)
-            exists_bc = safe_select("billing_cycles", "*", filters={"card_id": card_id, "cycle_start": bc["cycle_start"]}, limit=1)
-            if exists_bc:
-                safe_update("billing_cycles", bc, "card_id", card_id)  # update by card_id + cycle_start might not be unique; adapt if needed
-            else:
-                safe_insert("billing_cycles", bc)
-
-    # loans
-    for loan in cust_obj.get("loans", []):
-        loan_id = loan.get("loan_id") or str(uuid.uuid4())
-        loan_payload = {
-            "loan_id": loan_id,
-            "customer_id": cid,
-            "loan_type": loan.get("loan_type"),
-            "principal_amount": loan.get("principal_amount"),
-            "outstanding_amount": loan.get("outstanding_amount"),
-            "monthly_due": loan.get("monthly_due"),
-            "last_payment_date": loan.get("last_payment_date"),
-        }
-        if safe_select("loans", "*", filters={"loan_id": loan_id}, limit=1):
-            safe_update("loans", loan_payload, "loan_id", loan_id)
-        else:
-            safe_insert("loans", loan_payload)
-
-    # transactions (if provided at customer level)
-    for t in cust_obj.get("transactions", []):
-        tx_key = f"{cid}::{t.get('date')}::{t.get('amount')}::{t.get('description') or ''}"
-        tx_payload = {
-            "tx_id": tx_key,
-            "customer_id": cid,
-            "date": t.get("date"),
-            "amount": t.get("amount"),
-            "type": t.get("type"),
-            "description": t.get("description"),
-        }
-        if safe_select("transactions", "*", filters={"tx_id": tx_key}, limit=1):
-            safe_update("transactions", tx_payload, "tx_id", tx_key)
-        else:
-            safe_insert("transactions", tx_payload)
-
-    return {"customer_id": cid}
-
-
-# -----------------------------
-# Admin CRUD & "Run Agent"
-# -----------------------------
-def _require_admin(authorization: Optional[str]):
-    token_meta = validate_token(authorization)
-    if token_meta is None or token_meta.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="admin token required")
-    return token_meta
-
-
-@app.get("/admin/customer/{customer_id}")
-def admin_get_customer(customer_id: str, authorization: Optional[str] = Header(None)):
-    _require_admin(authorization)
+def api_get_customer_front(customer_id: str):
     cust = get_customer(customer_id)
     if not cust:
         raise HTTPException(status_code=404, detail="customer not found")
@@ -643,374 +316,107 @@ def admin_get_customer(customer_id: str, authorization: Optional[str] = Header(N
     decisions = list_decisions(customer_id, limit=100)
     return {"status": "ok", "customer": cust, "transactions": txs, "credit_cards": cards, "loans": loans, "decisions": decisions}
 
-
-@app.put("/admin/customer/{customer_id}")
-def admin_update_customer(customer_id: str, payload: Dict[str, Any] = Body(...), authorization: Optional[str] = Header(None)):
-    _require_admin(authorization)
-    allowed = {"name", "email", "account_creation_date"}
-    update_payload = {k: v for k, v in payload.items() if k in allowed}
-    if not update_payload:
-        raise HTTPException(status_code=400, detail=f"no updatable fields provided (allowed: {sorted(list(allowed))})")
-    try:
-        rows = safe_update("customers", update_payload, "customer_id", customer_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"failed to update customer: {e}")
-    return {"status": "ok", "updated": rows[0] if rows else None}
-
-
-@app.post("/admin/customers/{customer_id}/run-agent")
-def admin_run_agent_for_customer(customer_id: str, authorization: Optional[str] = Header(None)):
-    _require_admin(authorization)
-    if not CREW_AVAILABLE:
-        raise HTTPException(status_code=501, detail="Agent integration not available on this server build")
-    try:
-        cust = get_customer(customer_id)
-        if not cust:
-            raise HTTPException(status_code=404, detail="customer not found")
-        txs = get_transactions(customer_id, limit=200)
-        cards = get_credit_cards(customer_id)
-        loans = get_loans(customer_id)
-        prompt_parts = [
-            f"Evaluate loan eligibility for customer {customer_id}.",
-            "Use the following data (redacted where needed):",
-            f"Customer: {cust}",
-            f"Credit cards: {cards}",
-            f"Loans: {loans}",
-            f"Recent transactions (top 50): {txs[:50]}",
-            "Return EXACTLY a JSON object: {\"decision\":\"APPROVE|REVIEW|REJECT\",\"reason\":\"...\"} and NOTHING else."
-        ]
-        prompt = "\n\n".join(prompt_parts)
-        crew = build_crew(prompt)
-        result = crew.kickoff()
-        assistant_reply = str(result)
-        import json as _json
-        parsed = None
-        try:
-            parsed = _json.loads(assistant_reply)
-        except Exception:
-            return {"status": "ok", "agent_reply": assistant_reply, "note": "agent output not valid JSON; decision not saved"}
-        if isinstance(parsed, dict) and parsed.get("decision") and parsed.get("reason"):
-            try:
-                saved = record_decision(customer_id, parsed["decision"], parsed["reason"])
-            except Exception as e:
-                return {"status": "ok", "agent_decision": parsed, "save_error": str(e)}
-            return {"status": "ok", "agent_decision": parsed, "saved": saved}
-        else:
-            return {"status": "ok", "agent_reply": assistant_reply, "note": "agent output did not match expected decision shape"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        tb = traceback.format_exc()
-        print(tb)
-        raise HTTPException(status_code=500, detail=f"failed to run agent: {e}")
-
-
-# --------------------
-# Decisions endpoints
-# --------------------
 @app.get("/decisions")
-def api_get_decisions(customer_id: Optional[str] = Query(None), limit: int = 100, authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    try:
-        rows = list_decisions(customer_id, limit)
-        return {"status": "ok", "decisions": rows}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+def api_get_decisions(customer_id: Optional[str] = Query(None), limit: int = 100, format: str = Query("table")):
+    rows = list_decisions(customer_id, limit)
 
+    structured = []
+    for d in rows:
+        cid = d.get("customer_id")
+        structured.append({
+            "id": d.get("id"),
+            "customer_id": cid,
+            "customer_name": _get_customer_name(cid),
+            "decision": d.get("decision"),
+            "reason": d.get("reason"),
+            "created_at": d.get("created_at")
+        })
+
+    structured = sorted(structured, key=lambda x: x.get("created_at",""), reverse=True)
+
+    fmt = (format or "table").lower()
+    if fmt == "json":
+        return {"status": "ok", "format": "json", "decisions": structured}
+    elif fmt == "csv":
+        csv_text = _decisions_to_csv(structured)
+        return {"status": "ok", "format": "csv", "csv": csv_text, "decisions": structured}
+    else:
+        md_table = _decisions_to_markdown_table(structured)
+        html_table = "<pre>" + html.escape(md_table) + "</pre>"
+        return {"status": "ok", "format": "table", "table": md_table, "table_html_pre": html_table, "decisions": structured}
 
 @app.post("/update-decisions")
-def api_update_decision(payload: Dict[str, Any] = Body(...), authorization: Optional[str] = Header(None)):
-    """
-    Body: { "id": <decision_row_id>, "customer_id": "...", "decision": "APPROVE", "reason":"..." }
-    If id provided => update that row; otherwise create new decision record.
-    """
-    token_meta = validate_token(authorization)
-    if token_meta is None or token_meta.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="admin token required")
-    d_id = payload.get("id")
+def api_update_decision(payload: Dict[str, Any] = Body(...)):
     cust_id = payload.get("customer_id")
     decision = payload.get("decision")
     reason = payload.get("reason", "")
     if not cust_id or not decision:
         raise HTTPException(status_code=400, detail="customer_id and decision required")
-    try:
-        if d_id:
-            updated = update_decision_row(d_id, {"customer_id": cust_id, "decision": decision, "reason": reason})
-            return {"status": "ok", "updated": updated}
-        else:
-            saved = record_decision(cust_id, decision, reason)
-            return {"status": "ok", "decision": saved}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    saved = record_decision(cust_id, decision, reason)
+    return {"status": "ok", "decision": saved}
 
-
-# --------------------
-# Other CRUD endpoints (transactions, credit_cards, loans) - keep as before
-# --------------------
-@app.post("/transactions")
-def api_add_transaction(tx: TransactionIn, authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    obj = tx.dict()
-    added = add_transaction(obj)
-    return {"status": "ok", "transaction": added}
-
-
-@app.get("/customers/{customer_id}/transactions")
-def api_get_transactions(customer_id: str, limit: int = 200, authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    txs = get_transactions(customer_id, limit)
-    return {"status": "ok", "transactions": txs}
-
-
-@app.post("/credit_cards")
-def api_add_credit_card(card: CreditCardIn, authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    added = add_credit_card(card.dict())
-    return {"status": "ok", "credit_card": added}
-
-
-@app.get("/customers/{customer_id}/credit_cards")
-def api_get_credit_cards(customer_id: str, authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    cards = get_credit_cards(customer_id)
-    return {"status": "ok", "credit_cards": cards}
-
-
-@app.post("/loans")
-def api_add_loan(loan: LoanIn, authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    added = add_loan(loan.dict())
-    return {"status": "ok", "loan": added}
-
-
-@app.get("/customers/{customer_id}/loans")
-def api_get_loans(customer_id: str, authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    loans = get_loans(customer_id)
-    return {"status": "ok", "loans": loans}
-
-
-# Rules, notifications, settings (same as before)
-@app.get("/rules")
-def api_get_rules(authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    r = get_latest_rules()
-    if not r:
-        return {"status": "ok", "rules_text": DEFAULT_RULES_TEXT}
-    return {"status": "ok", "rules_text": r.get("rules_text", DEFAULT_RULES_TEXT)}
-
-
-@app.post("/rules")
-def api_set_rules(payload: Dict[str, Any] = Body(...), authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None or token_meta.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="admin token required")
-    rules_text = payload.get("rules_text")
-    if rules_text is None:
-        raise HTTPException(status_code=400, detail="rules_text required")
-    saved = upsert_rules(rules_text)
-    return {"status": "ok", "rules": saved}
-
-
-@app.get("/notifications")
-def api_list_notifications(limit: int = 100, authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    data = list_notifications(limit)
-    return {"status": "ok", "notifications": data}
-
-
-@app.post("/notifications")
-def api_post_notification(payload: Dict[str, Any] = Body(...), authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None or token_meta.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="admin token required")
-    title = payload.get("title")
-    body_text = payload.get("body", "")
-    level = payload.get("level", "info")
-    if not title:
-        raise HTTPException(status_code=400, detail="title required")
-    note = post_notification(title, body_text, level)
-    return {"status": "ok", "notification": note}
-
-
-@app.get("/settings/{key}")
-def api_get_setting(key: str, authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    s = get_setting(key)
-    return {"status": "ok", "setting": s}
-
-
-@app.post("/settings/{key}")
-def api_set_setting(key: str, payload: Dict[str, Any] = Body(...), authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None or token_meta.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="admin token required")
-    value = payload.get("value")
-    saved = upsert_setting(key, value)
-    return {"status": "ok", "setting": saved}
-
-
-# Sessions endpoints
-@app.get("/sessions")
-def api_list_sessions(authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    return {
-        "active_sessions": [{"session_id": k, "turns": len(v)} for k, v in _sessions_in_memory.items()],
-        "archived_sessions_counts": {k: len(v) for k, v in _sessions_history_in_memory.items()},
-    }
-
-
-@app.get("/sessions/{session_id}")
-def api_get_session(session_id: str, authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    s = _sessions_in_memory.get(session_id)
-    if s is None:
-        raise HTTPException(status_code=404, detail="session not found")
-    return {"session_id": session_id, "turns": s}
-
-
-@app.post("/sessions/{session_id}/end")
-def api_end_session(session_id: str, authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    s = _sessions_in_memory.pop(session_id, None)
-    if s is None:
-        raise HTTPException(status_code=404, detail="session not found")
-    _sessions_history_in_memory.setdefault(session_id, []).append(s)
-    try:
-        save_session_to_db(session_id, s)
-    except Exception:
-        pass
-    return {"status": "archived", "session_id": session_id}
-
-
-# Chat endpoint (keeps the behavior you had)
 @app.post("/chat")
-def api_chat(req: ChatRequest, authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    require_confirmation = False
-    if token_meta and token_meta.get("role") == "customer" and not req.customer_id:
-        req.customer_id = token_meta.get("id")
+def api_chat(req: ChatRequest):
     prompt = req.message
     session_id = req.session_id or str(uuid.uuid4())
     if session_id not in _sessions_in_memory:
         _sessions_in_memory[session_id] = []
     _sessions_in_memory[session_id].append({"role": "user", "text": prompt, "time": datetime.utcnow().isoformat()})
-    session_text_lines = []
-    for turn in _sessions_in_memory[session_id][-20:]:
-        role_tag = "USER" if turn.get("role") == "user" else "ASSISTANT"
-        session_text_lines.append(f"{role_tag}: {turn.get('text')}")
-    combined_context = "\n".join(session_text_lines)
 
-    if req.customer_id and require_confirmation:
-        recent_user_msgs = [t["text"].lower() for t in _sessions_in_memory[session_id] if t["role"] == "user"][-3:]
-        consent_given = any("yes" in m or "ok" in m or "confirm" in m or "go ahead" in m for m in recent_user_msgs)
-        if not consent_given:
-            assistant_reply = "I can check your account to evaluate loan eligibility. This will fetch transaction and credit information. Do you want me to proceed? Reply 'yes' to continue."
-            _sessions_in_memory[session_id].append({"role": "assistant", "text": assistant_reply, "time": datetime.utcnow().isoformat()})
-            return {"reply": assistant_reply, "session_id": session_id, "session_snapshot": _sessions_in_memory.get(session_id)}
+    combined_context = "\n".join([f"{t['role'].upper()}: {t['text']}" for t in _sessions_in_memory[session_id][-20:]])
 
-    if req.customer_id:
+    if not req.customer_id and req.role != "admin":
+        admin_keywords = ["all customer", "all decisions", "all users", "full data", "admin"]
+        if any(keyword in prompt.lower() for keyword in admin_keywords):
+            req.role = "admin"
+
+    if req.customer_id and req.role == "customer":
         try:
             cust = get_customer(req.customer_id)
             txs = get_transactions(req.customer_id, limit=50)
             cards = get_credit_cards(req.customer_id)
             loans = get_loans(req.customer_id)
-            def redact_card(c: dict):
-                card_id = c.get("card_id") or ""
-                masked = None
-                if card_id:
-                    s = str(card_id)
-                    masked = ("****" + s[-4:]) if len(s) >= 4 else ("****")
-                return {
-                    "card_id": c.get("card_id"),
-                    "masked_number": masked,
-                    "credit_limit": c.get("credit_limit"),
-                    "current_balance": c.get("current_balance")
-                }
             total_credit_limit = sum((c.get("credit_limit") or 0) for c in cards)
             total_balance = sum((c.get("current_balance") or 0) for c in cards)
-            credit_utilization_pct = (total_balance / total_credit_limit * 100) if total_credit_limit else None
-            active_loans_count = len([l for l in loans if (l.get("outstanding_amount") or l.get("outstanding") or 0) > 0])
+            credit_util = (total_balance / total_credit_limit * 100) if total_credit_limit else None
             recent_tx_count = len(txs)
-            credits = [t for t in txs if str(t.get("type", "")).lower() == "credit"]
             monthly_income_estimate = None
+            credits = [t for t in txs if str(t.get("type","")).lower() == "credit"]
             if credits:
                 try:
                     monthly_income_estimate = max((t.get("amount") or 0) for t in credits)
                 except Exception:
                     monthly_income_estimate = None
-            account_age_days = None
-            try:
-                acd = cust.get("account_creation_date")
-                if acd:
-                    from datetime import datetime as _dt
-                    created = _dt.fromisoformat(acd) if isinstance(acd, str) else acd
-                    account_age_days = (_dt.utcnow() - created).days
-            except Exception:
-                account_age_days = None
             summary = {
                 "customer_id": cust.get("customer_id"),
                 "name": cust.get("name"),
-                "account_age_days": account_age_days,
                 "monthly_income_estimate": monthly_income_estimate,
-                "credit_utilization_pct": round(credit_utilization_pct, 2) if credit_utilization_pct is not None else None,
-                "active_loans_count": active_loans_count,
+                "credit_utilization_pct": round(credit_util,2) if credit_util is not None else None,
                 "recent_tx_count": recent_tx_count,
-                "credit_cards": [redact_card(c) for c in cards],
+                "active_loans_count": len(loans),
             }
-            combined_context += "\n\nCustomerSummary (redacted & derived signals): " + str(summary)
-            _sessions_in_memory[session_id].append({
-                "role": "system",
-                "text": f"Fetched redacted customer summary for {req.customer_id} to evaluate loan eligibility",
-                "time": datetime.utcnow().isoformat()
-            })
+            combined_context += "\n\nCustomerSummary: " + json.dumps(summary, indent=2)
+            combined_context += "\n\nCustomerFullProfile:"
+            combined_context += "\n- Profile: " + json.dumps(cust, indent=2)
+            combined_context += "\n- Transactions (Recent 50): " + json.dumps(txs, indent=2)
+            combined_context += "\n- Credit Cards: " + json.dumps(cards, indent=2)
+            combined_context += "\n- Loans: " + json.dumps(loans, indent=2)
+
+            _sessions_in_memory[session_id].append({"role":"system","text":f"Fetched summary and full profile for {req.customer_id} and injected into prompt context.","time":datetime.utcnow().isoformat()})
         except Exception:
-            combined_context += "\n\nCustomerSummary: unavailable (db read error)"
-    else:
-        combined_context += "\n\nNote: Customer ID not provided. If you need to check eligibility, please ask the user to provide their Customer ID or to log in. Do not attempt to fetch account data."
+            combined_context += "\n\nCustomerSummary: unavailable (read error)"
 
     assistant_reply = None
     if CREW_AVAILABLE:
         try:
-            crew = build_crew(combined_context)
+            crew = build_crew(combined_context, role=req.role)
             result = crew.kickoff()
             assistant_reply = str(result)
             try:
                 import json as _json
                 parsed = _json.loads(assistant_reply)
                 if isinstance(parsed, dict) and parsed.get("decision") and parsed.get("reason") and req.customer_id:
-                    try:
-                        record_decision(req.customer_id, parsed["decision"], parsed["reason"])
-                    except Exception as save_exc:
-                        print("Failed to save decision:", save_exc)
+                    record_decision(req.customer_id, parsed["decision"], parsed["reason"])
             except Exception:
                 pass
         except Exception as exc:
@@ -1019,65 +425,182 @@ def api_chat(req: ChatRequest, authorization: Optional[str] = Header(None)):
             assistant_reply = f"Agent error: {str(exc)}"
     else:
         if req.customer_id:
-            assistant_reply = ("Assistant (fallback): I received your message and have access to your account. "
-                               "Ask 'check eligibility' to run a basic rules check, or provide more details.")
+            assistant_reply = "Assistant (fallback): I have your account summary. Ask 'check eligibility' to run a rules check (agent not available)."
         else:
-            assistant_reply = ("Assistant (fallback): I received your message. I don't know who you are — "
-                               "please provide your Customer ID or log in so I can check eligibility.")
+            assistant_reply = "Assistant (fallback): Provide your customer_id to fetch account information (agent not available)."
 
-    _sessions_in_memory[session_id].append({"role": "assistant", "text": assistant_reply, "time": datetime.utcnow().isoformat()})
-    try:
-        save_session_to_db(session_id, _sessions_in_memory[session_id])
-    except Exception:
-        pass
-    if req.end_session:
-        finished = _sessions_in_memory.pop(session_id, [])
-        _sessions_history_in_memory.setdefault(session_id, []).append(finished)
-        try:
-            archive_session_in_db(session_id)
-        except Exception:
-            pass
+    _sessions_in_memory[session_id].append({"role":"assistant","text":assistant_reply,"time":datetime.utcnow().isoformat()})
     return {"reply": assistant_reply, "session_id": session_id, "session_snapshot": _sessions_in_memory.get(session_id)}
 
-
-# Utility: list recent customers (for quick frontend)
-@app.get("/customers/recent")
-def api_customers_recent(limit: int = 50, authorization: Optional[str] = Header(None)):
-    token_meta = validate_token(authorization)
-    if token_meta is None:
-        raise HTTPException(status_code=403, detail="token required")
-    rows = list_customers(limit)
-    return {"status": "ok", "customers": rows}
-
-
-# API status indicator
-@app.get("/api-status")
-def api_status(authorization: Optional[str] = Header(None)):
-    # optionally restrict this to authorized users; we'll allow any token in dev
+@app.post("/admin/customers/{customer_id}/run-agent")
+def admin_run_agent_for_customer(customer_id: str):
+    if not CREW_AVAILABLE:
+        raise HTTPException(status_code=501, detail="Agent integration not available on this server build")
+    cust = get_customer(customer_id)
+    if not cust:
+        raise HTTPException(status_code=404, detail="customer not found")
+    txs = get_transactions(customer_id, limit=200)
+    cards = get_credit_cards(customer_id)
+    loans = get_loans(customer_id)
+    
+    prompt_parts = [
+        f"Admin request: Evaluate loan eligibility for customer {customer_id} using the following data and rules.",
+        DEFAULT_RULES_TEXT,
+        "Customer Data:",
+        f"Customer Profile: {json.dumps(cust, indent=2)}",
+        f"Credit Cards: {json.dumps(cards, indent=2)}",
+        f"Loans: {json.dumps(loans, indent=2)}",
+        f"Recent Transactions (top 50): {json.dumps(txs[:50], indent=2)}",
+        "Return EXACTLY a JSON object: {\"decision\":\"APPROVE|REVIEW|REJECT\",\"reason\":\"...\"} and NOTHING else."
+    ]
+    prompt = "\n\n".join(prompt_parts)
     try:
-        # quick supabase connectivity test
+        llm = LLM(model="gemini/gemini-2.5-flash", api_key=LLM_API_KEY) if LLM_API_KEY else LLM()
+        
+        admin_agent = Agent(
+            role="Loan Eligibility Evaluator",
+            goal="Analyze the provided customer data against the default rules and return a strict JSON decision.",
+            backstory="A specialized, rules-driven expert for rapid credit evaluation, operating under strict protocol.",
+            tools=[],
+            llm=llm,
+        )
+        
+        admin_task = Task(
+            description=f"Strictly evaluate the customer's data against the decision rules provided in the prompt. {prompt}",
+            expected_output="A single JSON object: {\"decision\":\"APPROVE|REVIEW|REJECT\",\"reason\":\"string\"}",
+            agent=admin_agent,
+        )
+        
+        crew = Crew(agents=[admin_agent], tasks=[admin_task], verbose=False)
+        result = crew.kickoff()
+        assistant_reply = str(result)
+        
+        import json as _json
         try:
-            sb.table("customers").select("customer_id").limit(1).execute()
-            supabase_connected = True
+            parsed = _json.loads(assistant_reply)
         except Exception:
-            supabase_connected = False
-        counts = {}
-        # get approximate counts for a few tables (best-effort)
-        for t in ("customers", "transactions", "credit_cards", "loans", "loan_decisions"):
-            try:
-                # a cheap way: request one record and rely on success as indicator
-                _ = sb.table(t).select("id").limit(1).execute()
-                counts[t] = "reachable"
-            except Exception:
-                counts[t] = "unreachable"
-        return {
-            "status": "ok",
-            "time": datetime.utcnow().isoformat(),
-            "supabase_connected": supabase_connected,
-            "table_reachability": counts
-        }
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}
+            return {"status":"ok", "agent_reply": assistant_reply, "note":"agent output not valid JSON; decision not saved"}
+        if isinstance(parsed, dict) and parsed.get("decision") and parsed.get("reason"):
+            saved = record_decision(customer_id, parsed["decision"], parsed["reason"])
+            return {"status":"ok", "agent_decision": parsed, "saved": saved}
+        else:
+            return {"status":"ok", "agent_reply": assistant_reply, "note":"agent output did not match expected decision shape"}
+    except Exception as exc:
+        tb = traceback.format_exc()
+        print(tb)
+        raise HTTPException(status_code=500, detail=f"failed to run agent: {str(exc)}")
+
+@app.get("/_dev/reload-sources")
+def dev_reload_sources():
+    return reload_sources()
+
+@app.get("/customers/{customer_id}/transactions")
+def api_get_transactions(customer_id: str, limit: int = 200):
+    txs = get_transactions(customer_id, limit)
+    return {"status":"ok", "transactions": txs}
+
+@app.get("/customers/{customer_id}/credit_cards")
+def api_get_credit_cards(customer_id: str):
+    cards = get_credit_cards(customer_id)
+    return {"status":"ok", "credit_cards": cards}
+
+@app.get("/customers/{customer_id}/loans")
+def api_get_loans(customer_id: str):
+    loans = get_loans(customer_id)
+    return {"status":"ok", "loans": loans}
+
+# Updated Pydantic Models to handle floats from frontend
+
+class BillingCycle(BaseModel):
+    cycle_start: str
+    cycle_end: str
+    amount_due: float      # Changed from implicit strict check to float
+    amount_paid: float     # Changed from implicit strict check to float
+    payment_date: str
+
+class CreditCard(BaseModel):
+    card_number: str
+    credit_limit: float    # Changed from int to float
+    current_balance: float # Changed from int to float
+    billing_cycles: List[BillingCycle] # Better validation than just 'list'
+
+class Loan(BaseModel):
+    loan_id: str
+    loan_type: str
+    principal_amount: float     # Changed from int to float
+    outstanding_amount: float   # Changed from int to float
+    monthly_due: float          # Changed from int to float
+    last_payment_date: str
+
+class Transaction(BaseModel):
+    date: str
+    amount: float          # Changed from int to float
+    type: str
+    description: str
+
+class customerdata(BaseModel):
+    customer_id: str
+    account_creation_date: Optional[str] = None
+    name: Optional[str] = None
+    # Ensure these are typed as Lists of the models above
+    credit_cards: Optional[List[CreditCard]] = None
+    loans: Optional[List[Loan]] = None
+    transactions: Optional[List[Transaction]] = None
 
 
-# End of file
+@app.post("/admin/customer-data/saveCustomerData")
+def api_update_customer_data(customer_data:customerdata):
+    customer_id = customer_data.customer_id
+
+    
+    credits_loan_data = _read_json_file(CREDITS_LOAN_FILE)
+    customer_accounts = credits_loan_data.get("customer_accounts", [])
+    
+    customer_found_cl = False
+    for i, account in enumerate(customer_accounts):
+        if account.get("customer_id") == customer_id:
+            customer_found_cl = True
+            
+
+            if customer_data.account_creation_date is not None:
+                customer_accounts[i]["account_creation_date"] = customer_data.account_creation_date
+            if customer_data.name is not None:
+                customer_accounts[i]["name"] = customer_data.name
+                
+        
+            if customer_data.credit_cards is not None:
+                customer_accounts[i]["credit_cards"] = [c.model_dump() for c in customer_data.credit_cards]
+                
+            if customer_data.loans is not None:
+                customer_accounts[i]["loans"] = [l.model_dump() for l in customer_data.loans]
+            break
+            
+    if not customer_found_cl:
+        raise HTTPException(status_code=404, detail=f"Customer ID {customer_id} not found in {CREDITS_LOAN_FILE}")
+        
+    credits_loan_data["customer_accounts"] = customer_accounts
+    _write_json_file(CREDITS_LOAN_FILE, credits_loan_data)
+    
+    
+    bank_statements_data = _read_json_file(BANK_STATEMENTS_FILE)
+    bank_statements = bank_statements_data.get("bank_statements", [])
+    
+    customer_found_bs = False
+    if customer_data.transactions is not None:
+        for i, statement in enumerate(bank_statements):
+            if statement.get("customer_id") == customer_id:
+                customer_found_bs = True
+                bank_statements[i]["transactions"] = [t.model_dump() for t in customer_data.transactions]
+                break
+                
+        if not customer_found_bs and customer_found_cl and customer_data.transactions:
+             bank_statements.append({
+                "customer_id": customer_id,
+                "transactions": [t.model_dump() for t in customer_data.transactions]
+             })
+             customer_found_bs = True
+
+    bank_statements_data["bank_statements"] = bank_statements
+    _write_json_file(BANK_STATEMENTS_FILE, bank_statements_data)
+    
+    return {"status": "ok", "message": f"Customer ID {customer_id} data successfully updated in {CREDITS_LOAN_FILE} and {BANK_STATEMENTS_FILE}."}

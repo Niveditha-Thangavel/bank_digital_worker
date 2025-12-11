@@ -1,0 +1,489 @@
+{
+  "customers": {
+    "C101": {
+      "customer_id": "C101",
+      "name": null,
+      "email": null,
+      "account_creation_date": "2024-04-01"
+    },
+    "C102": {
+      "customer_id": "C102",
+      "name": null,
+      "email": null,
+      "account_creation_date": "2025-07-01"
+    },
+    "C103": {
+      "customer_id": "C103",
+      "name": null,
+      "email": null,
+      "account_creation_date": "2024-04-01"
+    },
+    "C104": {
+      "customer_id": "C104",
+      "name": null,
+      "email": null,
+      "account_creation_date": "2024-01-15"
+    }
+  },
+  "transactions": {
+    "C101::2025-11-01::5000::Salary": {
+      "tx_id": "C101::2025-11-01::5000::Salary",
+      "customer_id": "C101",
+      "date": "2025-11-01",
+      "amount": 5000,
+      "type": "credit",
+      "description": "Salary"
+    },
+    "C101::2025-11-02::600::Grocery": {
+      "tx_id": "C101::2025-11-02::600::Grocery",
+      "customer_id": "C101",
+      "date": "2025-11-02",
+      "amount": 600,
+      "type": "debit",
+      "description": "Grocery"
+    },
+    "C101::2025-11-03::1200::Electronics": {
+      "tx_id": "C101::2025-11-03::1200::Electronics",
+      "customer_id": "C101",
+      "date": "2025-11-03",
+      "amount": 1200,
+      "type": "debit",
+      "description": "Electronics"
+    },
+    "C101::2025-11-05::300::Transport": {
+      "tx_id": "C101::2025-11-05::300::Transport",
+      "customer_id": "C101",
+      "date": "2025-11-05",
+      "amount": 300,
+      "type": "debit",
+      "description": "Transport"
+    },
+    "C101::2025-11-08::850::Shopping": {
+      "tx_id": "C101::2025-11-08::850::Shopping",
+      "customer_id": "C101",
+      "date": "2025-11-08",
+      "amount": 850,
+      "type": "debit",
+      "description": "Shopping"
+    },
+    "C101::2025-11-10::1000::Freelance Income": {
+      "tx_id": "C101::2025-11-10::1000::Freelance Income",
+      "customer_id": "C101",
+      "date": "2025-11-10",
+      "amount": 1000,
+      "type": "credit",
+      "description": "Freelance Income"
+    },
+    "C101::2025-11-12::400::Dining": {
+      "tx_id": "C101::2025-11-12::400::Dining",
+      "customer_id": "C101",
+      "date": "2025-11-12",
+      "amount": 400,
+      "type": "debit",
+      "description": "Dining"
+    },
+    "C101::2025-11-15::700::Utilities": {
+      "tx_id": "C101::2025-11-15::700::Utilities",
+      "customer_id": "C101",
+      "date": "2025-11-15",
+      "amount": 700,
+      "type": "debit",
+      "description": "Utilities"
+    },
+    "C102::2025-11-01::28000::Salary": {
+      "tx_id": "C102::2025-11-01::28000::Salary",
+      "customer_id": "C102",
+      "date": "2025-11-01",
+      "amount": 28000,
+      "type": "credit",
+      "description": "Salary"
+    },
+    "C102::2025-11-02::1500::Grocery": {
+      "tx_id": "C102::2025-11-02::1500::Grocery",
+      "customer_id": "C102",
+      "date": "2025-11-02",
+      "amount": 1500,
+      "type": "debit",
+      "description": "Grocery"
+    },
+    "C102::2025-11-03::200::Coffee": {
+      "tx_id": "C102::2025-11-03::200::Coffee",
+      "customer_id": "C102",
+      "date": "2025-11-03",
+      "amount": 200,
+      "type": "debit",
+      "description": "Coffee"
+    },
+    "C102::2025-11-04::500::Transport": {
+      "tx_id": "C102::2025-11-04::500::Transport",
+      "customer_id": "C102",
+      "date": "2025-11-04",
+      "amount": 500,
+      "type": "debit",
+      "description": "Transport"
+    },
+    "C102::2025-11-06::1000::Electronics": {
+      "tx_id": "C102::2025-11-06::1000::Electronics",
+      "customer_id": "C102",
+      "date": "2025-11-06",
+      "amount": 1000,
+      "type": "debit",
+      "description": "Electronics"
+    },
+    "C102::2025-11-08::2500::Shopping": {
+      "tx_id": "C102::2025-11-08::2500::Shopping",
+      "customer_id": "C102",
+      "date": "2025-11-08",
+      "amount": 2500,
+      "type": "debit",
+      "description": "Shopping"
+    },
+    "C102::2025-11-10::10000::Project Bonus": {
+      "tx_id": "C102::2025-11-10::10000::Project Bonus",
+      "customer_id": "C102",
+      "date": "2025-11-10",
+      "amount": 10000,
+      "type": "credit",
+      "description": "Project Bonus"
+    },
+    "C102::2025-11-12::300::Dining": {
+      "tx_id": "C102::2025-11-12::300::Dining",
+      "customer_id": "C102",
+      "date": "2025-11-12",
+      "amount": 300,
+      "type": "debit",
+      "description": "Dining"
+    },
+    "C103::2025-11-01::5000.0::salary": {
+      "tx_id": "C103::2025-11-01::5000.0::salary",
+      "customer_id": "C103",
+      "date": "2025-11-01",
+      "amount": 5000.0,
+      "type": "credit",
+      "description": "salary"
+    },
+    "C103::2025-11-02::600.0::-": {
+      "tx_id": "C103::2025-11-02::600.0::-",
+      "customer_id": "C103",
+      "date": "2025-11-02",
+      "amount": 600.0,
+      "type": "debit",
+      "description": "-"
+    },
+    "C103::2025-11-03::1200.0::-": {
+      "tx_id": "C103::2025-11-03::1200.0::-",
+      "customer_id": "C103",
+      "date": "2025-11-03",
+      "amount": 1200.0,
+      "type": "debit",
+      "description": "-"
+    },
+    "C103::2025-11-05::300.0::-": {
+      "tx_id": "C103::2025-11-05::300.0::-",
+      "customer_id": "C103",
+      "date": "2025-11-05",
+      "amount": 300.0,
+      "type": "debit",
+      "description": "-"
+    },
+    "C103::2025-11-08::850.0::-": {
+      "tx_id": "C103::2025-11-08::850.0::-",
+      "customer_id": "C103",
+      "date": "2025-11-08",
+      "amount": 850.0,
+      "type": "debit",
+      "description": "-"
+    },
+    "C103::2025-11-10::1000.0::-": {
+      "tx_id": "C103::2025-11-10::1000.0::-",
+      "customer_id": "C103",
+      "date": "2025-11-10",
+      "amount": 1000.0,
+      "type": "credit",
+      "description": "-"
+    },
+    "C103::2025-11-12::400.0::-": {
+      "tx_id": "C103::2025-11-12::400.0::-",
+      "customer_id": "C103",
+      "date": "2025-11-12",
+      "amount": 400.0,
+      "type": "debit",
+      "description": "-"
+    },
+    "C103::2025-11-15::700.0::-": {
+      "tx_id": "C103::2025-11-15::700.0::-",
+      "customer_id": "C103",
+      "date": "2025-11-15",
+      "amount": 700.0,
+      "type": "debit",
+      "description": "-"
+    },
+    "C104::2025-11-01::45000.0::-": {
+      "tx_id": "C104::2025-11-01::45000.0::-",
+      "customer_id": "C104",
+      "date": "2025-11-01",
+      "amount": 45000.0,
+      "type": "credit",
+      "description": "-"
+    },
+    "C104::2025-11-03::1500.0::-": {
+      "tx_id": "C104::2025-11-03::1500.0::-",
+      "customer_id": "C104",
+      "date": "2025-11-03",
+      "amount": 1500.0,
+      "type": "debit",
+      "description": "-"
+    },
+    "C104::2025-11-05::800.0::-": {
+      "tx_id": "C104::2025-11-05::800.0::-",
+      "customer_id": "C104",
+      "date": "2025-11-05",
+      "amount": 800.0,
+      "type": "debit",
+      "description": "-"
+    },
+    "C104::2025-11-08::2000.0::-": {
+      "tx_id": "C104::2025-11-08::2000.0::-",
+      "customer_id": "C104",
+      "date": "2025-11-08",
+      "amount": 2000.0,
+      "type": "debit",
+      "description": "-"
+    },
+    "C104::2025-11-10::5000.0::-": {
+      "tx_id": "C104::2025-11-10::5000.0::-",
+      "customer_id": "C104",
+      "date": "2025-11-10",
+      "amount": 5000.0,
+      "type": "credit",
+      "description": "-"
+    },
+    "C104::2025-11-12::900.0::-": {
+      "tx_id": "C104::2025-11-12::900.0::-",
+      "customer_id": "C104",
+      "date": "2025-11-12",
+      "amount": 900.0,
+      "type": "debit",
+      "description": "-"
+    },
+    "C104::2025-11-12::1200.0::-": {
+      "tx_id": "C104::2025-11-12::1200.0::-",
+      "customer_id": "C104",
+      "date": "2025-11-12",
+      "amount": 1200.0,
+      "type": "debit",
+      "description": "-"
+    }
+  },
+  "credit_cards": {
+    "4111111111111111": {
+      "card_id": "4111111111111111",
+      "card_number": "4111111111111111",
+      "customer_id": "C103",
+      "credit_limit": 10000.0,
+      "current_balance": 3200.0
+    },
+    "4222222222222222": {
+      "card_id": "4222222222222222",
+      "card_number": "4222222222222222",
+      "customer_id": "C102",
+      "credit_limit": 40000,
+      "current_balance": 30000
+    },
+    "4333333333333333": {
+      "card_id": "4333333333333333",
+      "card_number": "4333333333333333",
+      "customer_id": "C104",
+      "credit_limit": 50000.0,
+      "current_balance": 12000.0
+    }
+  },
+  "billing_cycles": [
+    {
+      "card_id": "4111111111111111",
+      "cycle_start": "2025-10-01",
+      "cycle_end": "2025-10-31",
+      "amount_due": 2000,
+      "amount_paid": 2000,
+      "payment_date": "2025-11-05"
+    },
+    {
+      "card_id": "4111111111111111",
+      "cycle_start": "2025-11-01",
+      "cycle_end": "2025-11-30",
+      "amount_due": 2500,
+      "amount_paid": 2400,
+      "payment_date": "2025-12-02"
+    },
+    {
+      "card_id": "4222222222222222",
+      "cycle_start": "2025-10-01",
+      "cycle_end": "2025-10-31",
+      "amount_due": 15000,
+      "amount_paid": 12000,
+      "payment_date": "2025-11-05"
+    },
+    {
+      "card_id": "4222222222222222",
+      "cycle_start": "2025-11-01",
+      "cycle_end": "2025-11-30",
+      "amount_due": 20000,
+      "amount_paid": 15000,
+      "payment_date": "2025-12-03"
+    },
+    {
+      "card_id": "4111111111111111",
+      "cycle_start": "2025-10-01",
+      "cycle_end": "2025-10-31",
+      "amount_due": 2000.0,
+      "amount_paid": 2000.0,
+      "payment_date": "2025-11-05"
+    },
+    {
+      "card_id": "4111111111111111",
+      "cycle_start": "2025-11-01",
+      "cycle_end": "2025-11-30",
+      "amount_due": 2500.0,
+      "amount_paid": 2400.0,
+      "payment_date": "2025-12-02"
+    },
+    {
+      "card_id": "4333333333333333",
+      "cycle_start": "2025-10-01",
+      "cycle_end": "2025-10-31",
+      "amount_due": 8000.0,
+      "amount_paid": 8000.0,
+      "payment_date": "2025-11-03"
+    },
+    {
+      "card_id": "4333333333333333",
+      "cycle_start": "2025-11-01",
+      "cycle_end": "2025-11-30",
+      "amount_due": 9000.0,
+      "amount_paid": 9000.0,
+      "payment_date": "2025-12-02"
+    }
+  ],
+  "loans": {
+    "L101": {
+      "loan_id": "L101",
+      "customer_id": "C103",
+      "loan_type": "personal",
+      "principal_amount": 5000.0,
+      "outstanding_amount": 2500.0,
+      "monthly_due": 500.0,
+      "last_payment_date": "2025-11-15"
+    },
+    "L102": {
+      "loan_id": "L102",
+      "customer_id": "C102",
+      "loan_type": "car",
+      "principal_amount": 200000,
+      "outstanding_amount": 180000,
+      "monthly_due": 15000,
+      "last_payment_date": "2025-11-20"
+    },
+    "L103": {
+      "loan_id": "L103",
+      "customer_id": "C102",
+      "loan_type": "personal",
+      "principal_amount": 10000,
+      "outstanding_amount": 6000,
+      "monthly_due": 1000,
+      "last_payment_date": "2025-11-10"
+    },
+    "L104": {
+      "loan_id": "L104",
+      "customer_id": "C104",
+      "loan_type": "personal",
+      "principal_amount": 10000.0,
+      "outstanding_amount": 2000.0,
+      "monthly_due": 500.0,
+      "last_payment_date": "2025-11-15"
+    }
+  },
+  "loan_decisions": [],
+  "notifications": [],
+  "settings": {},
+  "sessions": {
+    "bbf373fe-fa2e-47fd-ac13-68b50116aa8f": [
+      {
+        "role": "user",
+        "text": "HI",
+        "time": "2025-12-10T10:43:22.953786"
+      },
+      {
+        "role": "assistant",
+        "text": "Assistant (fallback): I received your message. If you'd like me to check eligibility for customer_id provide it and ask 'check eligibility'.",
+        "time": "2025-12-10T10:43:22.953802"
+      },
+      {
+        "role": "user",
+        "text": "CHECK FOR 101",
+        "time": "2025-12-10T10:43:36.297851"
+      },
+      {
+        "role": "assistant",
+        "text": "Assistant (fallback): I received your message. If you'd like me to check eligibility for customer_id provide it and ask 'check eligibility'.",
+        "time": "2025-12-10T10:43:36.297883"
+      },
+      {
+        "role": "user",
+        "text": "FO C101",
+        "time": "2025-12-10T10:43:41.082710"
+      },
+      {
+        "role": "assistant",
+        "text": "Assistant (fallback): I received your message. If you'd like me to check eligibility for customer_id provide it and ask 'check eligibility'.",
+        "time": "2025-12-10T10:43:41.082741"
+      }
+    ],
+    "8e4f12b1-ea0f-429a-b4be-b515fac0d25b": [
+      {
+        "role": "user",
+        "text": "Check eligibility for my loan",
+        "time": "2025-12-10T10:44:17.614978"
+      },
+      {
+        "role": "system",
+        "text": "Fetched redacted customer summary for C101",
+        "time": "2025-12-10T10:44:17.615102"
+      },
+      {
+        "role": "assistant",
+        "text": "Assistant (fallback): I received your message. If you'd like me to check eligibility for customer_id provide it and ask 'check eligibility'.",
+        "time": "2025-12-10T10:44:17.615110"
+      },
+      {
+        "role": "user",
+        "text": "Check eligibility for my loan",
+        "time": "2025-12-10T10:44:55.319227"
+      },
+      {
+        "role": "system",
+        "text": "Fetched redacted customer summary for C101",
+        "time": "2025-12-10T10:44:55.319315"
+      },
+      {
+        "role": "assistant",
+        "text": "Assistant (fallback): I received your message. If you'd like me to check eligibility for customer_id provide it and ask 'check eligibility'.",
+        "time": "2025-12-10T10:44:55.319321"
+      },
+      {
+        "role": "user",
+        "text": "C101 CHECK ELIGIBILITY",
+        "time": "2025-12-10T10:45:10.091652"
+      },
+      {
+        "role": "system",
+        "text": "Fetched redacted customer summary for C101",
+        "time": "2025-12-10T10:45:10.091753"
+      },
+      {
+        "role": "assistant",
+        "text": "Assistant (fallback): I received your message. If you'd like me to check eligibility for customer_id provide it and ask 'check eligibility'.",
+        "time": "2025-12-10T10:45:10.091759"
+      }
+    ]
+  }
+}

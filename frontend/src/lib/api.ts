@@ -138,7 +138,7 @@ export async function getCustomerData(customerId: string): Promise<CustomerData 
 }
 
 export async function saveCustomerData(data: CustomerData): Promise<void> {
-  const response = await fetch(`${API_BASE}/customer`, {
+  const response = await fetch(`${API_BASE}/admin/customer-data/saveCustomerData`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
