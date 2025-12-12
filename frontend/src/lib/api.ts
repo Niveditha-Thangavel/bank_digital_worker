@@ -23,6 +23,29 @@ export interface DecisionsMap {
   [customerId: string]: Decision;
 }
 
+export async function sendAdminChatMessage(
+  message: string,
+  customerId?: string,
+  sessionId?: string,
+  endSession?: boolean
+): Promise<ChatResponse> {
+  const response = await fetch(`${API_BASE}/admin/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message,
+      customer_id: customerId,
+      session_id: sessionId,
+      end_session: endSession
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Admin chat request failed: ${response.statusText}`);
+  }
+
+  return response.json();
+}
 
 
 export async function sendChatMessage(
@@ -41,7 +64,9 @@ export async function sendChatMessage(
       end_session: endSession
     })
   });
+  
 
+  
   if (!response.ok) {
     throw new Error(`Chat request failed: ${response.statusText}`);
   }

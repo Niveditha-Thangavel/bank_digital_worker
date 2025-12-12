@@ -6,14 +6,12 @@ import { cn } from '@/lib/utils';
 
 const customerNavItems = [
   { title: 'Chat', url: '/chat', icon: MessageSquare },
-  { title: 'History', url: '/history', icon: History },
   { title: 'Rules', url: '/rules', icon: FileText },
   { title: 'Settings', url: '/settings', icon: Settings },
   { title: 'Help', url: '/help', icon: HelpCircle },
 ];
 
 const adminNavItems = [
-  { title: 'History', url: '/admin/history', icon: History },
   { title: 'Customer Data', url: '/admin/customer-data', icon: Database },
   { title: 'Decisions', url: '/admin/decisions', icon: LayoutDashboard },
   { title: 'Notifications', url: '/admin/notifications', icon: Bell },

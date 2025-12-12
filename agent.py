@@ -1,45 +1,50 @@
-import os
+import os, re
 import json
 import uuid
 import traceback
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Body, Query
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Body
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from threading import Lock
-from io import StringIO
-import csv
-import html
+from crewai import Agent, Crew, LLM, Task
+from crewai.tools import BaseTool
 
 load_dotenv()
 
+#Loading json files
 BANK_STATEMENTS_FILE = "bank_statements.json"
 CREDITS_LOAN_FILE = "credits_loan.json"
 DECISIONS_FILE = "decisions.json"
 
 if not os.path.exists(DECISIONS_FILE):
     with open(DECISIONS_FILE, "w", encoding="utf-8") as f:
-        json.dump([], f, indent=2)
+        json.dump({"decisions": []}, f, indent=2, ensure_ascii=False)
 
-_file_lock = Lock()
 
+#Functions to perform file actions
 def _read_json_file(path: str) -> Any:
+    """Return parsed JSON or {} on parse error."""
     if not os.path.exists(path):
         return {}
-    with _file_lock:
+    try:
         with open(path, "r", encoding="utf-8") as f:
-            try:
-                return json.load(f)
-            except Exception:
-                return {}
+            return json.load(f)
+    except Exception:
+        return {}
 
 def _write_json_file(path: str, data: Any):
-    with _file_lock:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, default=str)
+    tmp = f"{path}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, default=str, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"[ERROR] Failed to write {path}: {e}")
+        traceback.print_exc()
+        raise
 
 def _load_bank_statements() -> List[Dict[str, Any]]:
     data = _read_json_file(BANK_STATEMENTS_FILE)
@@ -49,23 +54,26 @@ def _load_customer_accounts() -> List[Dict[str, Any]]:
     data = _read_json_file(CREDITS_LOAN_FILE)
     return data.get("customer_accounts", []) if isinstance(data, dict) else []
 
-def _load_decisions() -> List[Dict[str, Any]]:
-    data = _read_json_file(DECISIONS_FILE)
-    return data
+def _load_decisions() -> Dict[str, List[Dict[str, Any]]]:
+    """Always return canonical dict shape."""
+    raw = _read_json_file(DECISIONS_FILE)
+    if isinstance(raw, dict) and "decisions" in raw and isinstance(raw["decisions"], list):
+        return raw
+    if isinstance(raw, list):
+        return {"decisions": raw}
+    return {"decisions": []}
 
-def _append_decision(decision_obj: Dict[str, Any]) -> Dict[str, Any]:
-    decisions_data = _load_decisions()
-    if not isinstance(decisions_data, dict) or "decisions" not in decisions_data:
-        decisions_data = {"decisions": []}
-    decision_list = decisions_data["decisions"]
-    decision_list = [
-        d for d in decision_list
-        if d.get("customer_id") != decision_obj["customer_id"]
-    ]
-    decision_list.append(decision_obj)
-    decisions_data["decisions"] = decision_list
-    _write_json_file(DECISIONS_FILE, decisions_data)
+def _append_decision(decision_obj: Dict[str, Any], override_existing: bool = False) -> Dict[str, Any]:
+    """Append decision WITHOUT LOCK."""
+    data = _load_decisions()
+    decisions = data.get("decisions", [])
 
+    if override_existing:
+        decisions = [d for d in decisions if d.get("customer_id") != decision_obj.get("customer_id")]
+
+    decisions.append(decision_obj)
+    data["decisions"] = decisions
+    _write_json_file(DECISIONS_FILE, data)
     return decision_obj
 
 def list_customers() -> List[Dict[str, Any]]:
@@ -103,37 +111,37 @@ def get_loans(customer_id: str) -> List[Dict[str, Any]]:
     return cust.get("loans", []) or []
 
 def list_decisions(customer_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
-    all_dec = _load_decisions()
+    all_dec = _load_decisions().get("decisions", [])
     if customer_id:
         filtered = [d for d in all_dec if d.get("customer_id") == customer_id]
     else:
         filtered = all_dec
     try:
         filtered_sorted = sorted(filtered, key=lambda x: x.get("created_at", ""), reverse=True)
-    except Exception:
+    except:
         filtered_sorted = filtered
     return filtered_sorted[:limit]
 
-def record_decision(customer_id: str, decision: str, reason: str) -> Dict[str, Any]:
+def record_decision(customer_id: str, decision: str, reason: str, override_existing: bool = False) -> Dict[str, Any]:
     obj = {
+        "id": str(uuid.uuid4()),
         "customer_id": customer_id,
         "decision": decision,
         "reason": reason,
         "created_at": datetime.utcnow().isoformat()
     }
-    print(obj)
-    return _append_decision(obj)
+    print("Recording decision:", obj)
+    return _append_decision(obj, override_existing=override_existing)
 
 def reload_sources():
     return {
         "bank_statements_count": len(_load_bank_statements()),
         "customer_accounts_count": len(_load_customer_accounts()),
-        "decisions_count": len(_load_decisions()),
+        "decisions_count": len(_load_decisions().get("decisions", [])),
     }
 
+#Declaring tools to support chat model
 try:
-    from crewai import Agent, Crew, LLM, Task
-    from crewai.tools import BaseTool
     CREW_AVAILABLE = True
 except Exception:
     CREW_AVAILABLE = False
@@ -164,41 +172,74 @@ if CREW_AVAILABLE:
             return json.dumps(decisions)
 
     class update_decisionTool(BaseTool):
-        name:str = "UpdateDecisionTool"
+        name:str = "UpdateDecisions"
         description:str = "Update the decision of customer id "
         def _run(self, customer_id: str, decision: str, reason: str):
+            data = _load_decisions()  
+            found = False
+            print(decision, reason, customer_id)
+            for d in data.get("decisions", []):
+                if d.get("customer_id") == customer_id:
+                    d["decision"] = decision
+                    d["reason"] = reason
+                    d["created_at"] = datetime.utcnow().isoformat()
+                    found = True
+                    break
+            _write_json_file(DECISIONS_FILE, data)
+            if found:
+                return "Decision updated successfully"
+            return "Customer id not found"
 
-            with open(DECISIONS_FILE, 'r') as f:
-                data = json.load(f)
-            
-            customer_found = False
-            for i in data:
-                if i["customer_id"] == customer_id:
-                    i["decision"] = decision
-                    i["reason"] = reason
-                    i["created_at"] = datetime.utcnow().isoformat()
-                    customer_found = True
-                    break  
-
-            with open(DECISIONS_FILE, "w") as f:
-                json.dump(data, f, indent=2, default=str)
-                
-            return "Decision updated successfully"
-                        
-    def build_crew(prompt: str, role: str = "customer", tools: Optional[List[BaseTool]] = None) -> Crew:
+    #Creating crew with agent and task
+    def build_crew(prompt: str, role: str) -> Crew:
         llm = LLM(model="gemini/gemini-2.5-flash", api_key=LLM_API_KEY) if LLM_API_KEY else LLM()
         
+        #for admin chat
         if role == "admin":
-            tool_list = [FetchdecTool(),update_decisionTool()]
-            agent_goal = f"Provide answers and all requested details in a clean, comprehensive, professional format based on the prompt: '{prompt}'. Always use FetchDecisions tool if the request is about decisions."
-            agent_backstory = "Expert in providing comprehensive analysis and detailed data access to administrators. You have full access to all historical decisions via the FetchDecisions tool. have access and can fetch full decision data "
-            task_description = (
-                "You are operating in Admin mode. Answer questions and accomplish the task using the available tools as the answer "
-                "Use the FetchDecisions tool to fetch all decisions. Parse the JSON output from the tool and **format the result ONLY as a clean, structured Markdown table** (including ID, Customer ID, Decision, and Reason). **Do not include any text, headers, or footers before or after the table**. "  
-                "Provide all details for the admin in a clean, structured format." 
-                "Use the update_decisionTool to modify the decision if the admin wishes to modify it using customer id, decision, and reason"
+            tool_list = [FetchdecTool(), update_decisionTool()]
+
+            agent_goal = (
+                f"Provide accurate, complete, and professionally formatted responses to the user in a friendly way "
+                f"based on the administrator's request: '{prompt}'. "
+                f"Use FetchDecisions for any request involving decisions or summaries."
+                "use UpdateDecisions for updating decisions"
             )
-            expected_output = "A clean Markdown table showing all decisions, or the required JSON object for evaluation, or a professional, detailed answer."
+
+            agent_backstory = (
+                "You are an expert administrative decision-analysis agent. "
+                "You have full access to all historical decisions via FetchDecisions "
+                "and the ability to directly modify any customer's decision using "
+                "update_decisionTool. "
+                "You always respond with precise, professional, clean output — no extra text."
+            )
+
+            task_description = (
+                "You are operating in Admin mode. Follow these rules carefully:\n\n"
+
+                " **Fetching Decisions**\n"
+                "- When the admin asks to show, view, list, retrieve, or compare decisions, "
+                "you MUST call FetchDecisions.\n"
+                "- Parse the returned JSON and output ONLY a clean Markdown table.\n"
+                "- Columns: ID, Customer ID, Decision, Reason.\n"
+                "- No text before or after the table.\n\n"
+
+                " **Updating Decisions Automatically**\n"
+                "- When the admin asks to change, modify, update, override, correct, or adjust "
+                "a customer's decision, you MUST call update_decisionTool.\n"
+                "- Use it with the required arguments: customer_id, decision, reason.\n"
+                "- After the tool call, provide a short, professional confirmation message.\n\n"
+
+                " **Formatting Rules**\n"
+                "- Never include explanations unless explicitly asked.\n"
+                "- Never output JSON unless the admin explicitly requests JSON.\n"
+                "- Always maintain a clean, professional tone.\n\n"
+            )
+
+            expected_output = (
+                "A clean Markdown table, or a confirmation message after decision update"
+            )
+
+        #for customer chat
         else:
             tool_list = [FetchTool(), RulesTool()]
             agent_goal = f"Provide details and chats in a friendly way and accomplish the task in '{prompt}'"
@@ -206,7 +247,7 @@ if CREW_AVAILABLE:
             task_description = (
                 "Chat with the user in a friendly manner. "
                 "Answer questions and accomplish the task using the available tools. "
-                "Use the RulesProvider to fetch decision rules when an eligibility check is requested and mention as the given format Decision: and Reason:"
+                "Use the RulesProvider to fetch decision rules when an eligibility check is requested and mention as the given format Decision: and Reason: always"
                 "Use the CustomerDataTool as a reference that you have access to the customer's data. If customer_id is not provided, you cannot access account details. If unable to answer, apologize and tell that you will come back soon, also thank them for their patience. Provide only their details to the customer, by using their customer id."
             )
             expected_output = "User friendly answer to the question (no json)."
@@ -226,6 +267,7 @@ if CREW_AVAILABLE:
         )
         return Crew(agents=[chatbot], tasks=[chatbot_task], verbose=False)
 
+#Rules used for analysis
 DEFAULT_RULES_TEXT = (
     "Rules:\n"
     "1. Income Check: Income must be ≥ ₹20,000 per month\n"
@@ -246,6 +288,7 @@ DEFAULT_RULES_TEXT = (
     'OUTPUT REQUIREMENT: Return exactly the JSON object {"decision":"APPROVE|REVIEW|REJECT","reason":"string"} and NOTHING else.'
 )
 
+#api connection
 app = FastAPI(title="Banking Agent (JSON DB) - No Auth Mode")
 
 app.add_middleware(
@@ -264,43 +307,6 @@ class ChatRequest(BaseModel):
     role: Optional[str] = "customer"
 
 _sessions_in_memory: Dict[str, List[Dict[str, Any]]] = {}
-_sessions_history_in_memory: Dict[str, List[List[Dict[str, Any]]]] = {}
-
-def _get_customer_name(customer_id: Optional[str]) -> str:
-    if not customer_id:
-        return "(Unknown Customer)"
-    cust = get_customer(customer_id)
-    if not cust:
-        return "(Unknown Customer)"
-    return cust.get("name") or "(Unknown Customer)"
-
-def _escape_pipe(text: str) -> str:
-    return str(text).replace("|", "\\|")
-
-def _decisions_to_markdown_table(decisions: List[Dict[str, Any]]) -> str:
-    headers = ["ID", "Customer ID", "Customer Name", "Decision", "Reason", "Created At"]
-    lines = []
-    lines.append("| " + " | ".join(headers) + " |")
-    lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
-    for d in decisions:
-        row = [
-            _escape_pipe(d.get("id", "")),
-            _escape_pipe(d.get("customer_id", "")),
-            _escape_pipe(d.get("customer_name", "")),
-            _escape_pipe(d.get("decision", "")),
-            _escape_pipe(d.get("reason", "")),
-            _escape_pipe(d.get("created_at", "")),
-        ]
-        lines.append("| " + " | ".join(row) + " |")
-    return "\n".join(lines)
-
-def _decisions_to_csv(decisions: List[Dict[str, Any]]) -> str:
-    output = StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["id", "customer_id", "customer_name", "decision", "reason", "created_at"])
-    for d in decisions:
-        writer.writerow([d.get("id",""), d.get("customer_id",""), d.get("customer_name",""), d.get("decision",""), d.get("reason",""), d.get("created_at","")])
-    return output.getvalue()
 
 @app.get("/health")
 def health():
@@ -311,7 +317,7 @@ def health_full():
     try:
         bank_count = len(_load_bank_statements())
         cust_count = len(_load_customer_accounts())
-        dec_count = len(_load_decisions())
+        dec_count = len(_load_decisions().get("decisions", []))
         return {"status": "ok", "bank_statements": bank_count, "customer_accounts": cust_count, "decisions": dec_count}
     except Exception as e:
         return {"status": "error", "error": str(e)}
@@ -334,7 +340,6 @@ def api_get_customer_front(customer_id: str):
     return {"status": "ok", "customer": cust, "transactions": txs, "credit_cards": cards, "loans": loans, "decisions": decisions}
 
 
-
 @app.post("/update-decisions")
 def api_update_decision(payload: Dict[str, Any] = Body(...)):
     cust_id = payload.get("customer_id")
@@ -342,8 +347,147 @@ def api_update_decision(payload: Dict[str, Any] = Body(...)):
     reason = payload.get("reason", "")
     if not cust_id or not decision:
         raise HTTPException(status_code=400, detail="customer_id and decision required")
+    # Here we record a new decision entry; preserve history by default
     saved = record_decision(cust_id, decision, reason)
     return {"status": "ok", "decision": saved}
+
+@app.post("/admin/chat")
+def admin_api_chat(req: ChatRequest):
+    prompt = req.message
+    session_id = req.session_id or str(uuid.uuid4())
+    if session_id not in _sessions_in_memory:
+        _sessions_in_memory[session_id] = []
+    _sessions_in_memory[session_id].append({"role": "user", "text": prompt, "time": datetime.utcnow().isoformat()})
+
+    combined_context = "\n".join([f"{t['role'].upper()}: {t['text']}" for t in _sessions_in_memory[session_id][-20:]])
+    req.role = "admin"
+    try:
+        cust = get_customer(req.customer_id)
+        txs = get_transactions(req.customer_id, limit=50)
+        cards = get_credit_cards(req.customer_id)
+        loans = get_loans(req.customer_id)
+        total_credit_limit = sum((c.get("credit_limit") or 0) for c in cards)
+        total_balance = sum((c.get("current_balance") or 0) for c in cards)
+        credit_util = (total_balance / total_credit_limit * 100) if total_credit_limit else None
+        recent_tx_count = len(txs)
+        monthly_income_estimate = None
+        credits = [t for t in txs if str(t.get("type","")).lower() == "credit"]
+        if credits:
+            try:
+                monthly_income_estimate = max((t.get("amount") or 0) for t in credits)
+            except Exception:
+                monthly_income_estimate = None
+        summary = {
+            "customer_id": cust.get("customer_id"),
+            "name": cust.get("name"),
+            "monthly_income_estimate": monthly_income_estimate,
+            "credit_utilization_pct": round(credit_util,2) if credit_util is not None else None,
+            "recent_tx_count": recent_tx_count,
+            "active_loans_count": len(loans),
+        }
+        combined_context += "\n\nCustomerSummary: " + json.dumps(summary, indent=2)
+        combined_context += "\n\nCustomerFullProfile:"
+        combined_context += "\n- Profile: " + json.dumps(cust, indent=2)
+        combined_context += "\n- Transactions (Recent 50): " + json.dumps(txs, indent=2)
+        combined_context += "\n- Credit Cards: " + json.dumps(cards, indent=2)
+        combined_context += "\n- Loans: " + json.dumps(loans)
+
+        _sessions_in_memory[session_id].append({"role":"system","text":f"Fetched summary and full profile for {req.customer_id} and injected into prompt context.","time":datetime.utcnow().isoformat()})
+    except Exception:
+        combined_context += "\n\nCustomerSummary: unavailable (read error)"
+
+    assistant_reply = None
+    if CREW_AVAILABLE:
+        try:
+            crew = build_crew(combined_context, role=req.role)
+            try:
+                setattr(crew, "verbose", True)
+            except Exception:
+                pass
+
+            try:
+                result = crew.kickoff()
+                assistant_reply = str(result)
+            except Exception as kickoff_exc:
+                print("[CREW ERROR] kickoff failed:", repr(kickoff_exc))
+                try:
+                    for i, t in enumerate(getattr(crew, "tasks", []) or []):
+                        print(f"[CREW DEBUG] Task[{i}] desc:", getattr(t, "description", None))
+                        print(f"[CREW DEBUG] Task[{i}] expected_output:", getattr(t, "expected_output", None))
+                except Exception as iterr:
+                    print("[CREW DEBUG] task introspect failed:", iterr)
+                try:
+                    for i, a in enumerate(getattr(crew, "agents", []) or []):
+                        print(f"[CREW DEBUG] Agent[{i}] role:", getattr(a, "role", None))
+                        print(f"[CREW DEBUG] Agent[{i}] goal:", getattr(a, "goal", None))
+                except Exception as aerr:
+                    print("[CREW DEBUG] agent introspect failed:", aerr)
+
+                tb = traceback.format_exc()
+                print(tb)
+                assistant_reply = f"Agent error: {str(kickoff_exc)}"
+                
+            if assistant_reply:
+                print("[DEBUG] assistant raw reply:", assistant_reply)
+                parsed = None
+                try:
+                    parsed = json.loads(assistant_reply)
+                    print("[DEBUG] parsed JSON (direct):", parsed)
+                except Exception:
+                    parsed = None
+
+                if parsed is None:
+                    m_dec = re.search(r"(?mi)^\s*Decision\s*:\s*(.+)$", assistant_reply)
+                    m_rea = re.search(r"(?mi)^\s*Reason\s*:\s*((?:.|\n)*?)(?:\n\s*\n|$)", assistant_reply, re.S)
+
+                    decision_val = m_dec.group(1).strip() if m_dec else None
+                    reason_val = None
+                    if m_rea:
+                        raw_reason = m_rea.group(1).strip()
+                        lines = [ln.strip() for ln in raw_reason.splitlines() if ln.strip()]
+                        reason_val = " ".join(lines)
+
+                    if decision_val or reason_val:
+                        parsed = {
+                            "Decision": decision_val,
+                            "decision": decision_val,
+                            "Reason": reason_val,
+                            "reason": reason_val
+                        }
+                        print("[DEBUG] parsed from regex:", parsed)
+
+                if isinstance(parsed, dict) and req.customer_id:
+                    dec = parsed.get("decision") or parsed.get("Decision") or parsed.get("DECISION")
+                    rea = parsed.get("reason") or parsed.get("Reason") or parsed.get("REASON")
+                    if dec and rea:
+                        try:
+                            print(f"[INFO] saving decision for {req.customer_id}: {dec} - {rea[:120]}...")
+                            record_decision(req.customer_id, dec, rea, override_existing=True)
+                            print("[INFO] record_decision succeeded")
+                            try:
+                                print("[INFO] DECISIONS_FILE path:", os.path.abspath(DECISIONS_FILE))
+                            except Exception:
+                                pass
+                        except Exception as write_exc:
+                            print("[ERROR] record_decision raised:", write_exc)
+                            traceback.print_exc()
+                    else:
+                        print("[WARN] parsed dict missing decision/reason keys:", parsed)
+                else:
+                    print("[DEBUG] parsed not dict or no customer_id; parsed:", parsed)
+            else:
+                print("[WARN] assistant_reply empty after kickoff")
+        except Exception as exc:
+            tb = traceback.format_exc()
+            print("[UNEXPECTED ERROR] in CREW_AVAILABLE branch:", tb)
+            assistant_reply = f"Agent error: {str(exc)}"
+    else:
+        if req.customer_id:
+            assistant_reply = "Assistant (fallback): I have your account summary. Ask 'check eligibility' to run a rules check (agent not available)."
+        else:
+            assistant_reply = "Assistant (fallback): Provide your customer_id to fetch account information (agent not available)."
+
+    return {"reply": assistant_reply, "session_id": session_id, "session_snapshot": _sessions_in_memory.get(session_id)}
 
 @app.post("/chat")
 def api_chat(req: ChatRequest):
@@ -355,46 +499,42 @@ def api_chat(req: ChatRequest):
 
     combined_context = "\n".join([f"{t['role'].upper()}: {t['text']}" for t in _sessions_in_memory[session_id][-20:]])
 
-    if not req.customer_id and req.role != "admin":
-        admin_keywords = ["all customer", "all decisions", "all users", "full data", "admin"]
-        if any(keyword in prompt.lower() for keyword in admin_keywords):
-            req.role = "admin"
 
-    if req.customer_id and req.role == "customer":
-        try:
-            cust = get_customer(req.customer_id)
-            txs = get_transactions(req.customer_id, limit=50)
-            cards = get_credit_cards(req.customer_id)
-            loans = get_loans(req.customer_id)
-            total_credit_limit = sum((c.get("credit_limit") or 0) for c in cards)
-            total_balance = sum((c.get("current_balance") or 0) for c in cards)
-            credit_util = (total_balance / total_credit_limit * 100) if total_credit_limit else None
-            recent_tx_count = len(txs)
-            monthly_income_estimate = None
-            credits = [t for t in txs if str(t.get("type","")).lower() == "credit"]
-            if credits:
-                try:
-                    monthly_income_estimate = max((t.get("amount") or 0) for t in credits)
-                except Exception:
-                    monthly_income_estimate = None
-            summary = {
-                "customer_id": cust.get("customer_id"),
-                "name": cust.get("name"),
-                "monthly_income_estimate": monthly_income_estimate,
-                "credit_utilization_pct": round(credit_util,2) if credit_util is not None else None,
-                "recent_tx_count": recent_tx_count,
-                "active_loans_count": len(loans),
-            }
-            combined_context += "\n\nCustomerSummary: " + json.dumps(summary, indent=2)
-            combined_context += "\n\nCustomerFullProfile:"
-            combined_context += "\n- Profile: " + json.dumps(cust, indent=2)
-            combined_context += "\n- Transactions (Recent 50): " + json.dumps(txs, indent=2)
-            combined_context += "\n- Credit Cards: " + json.dumps(cards, indent=2)
-            combined_context += "\n- Loans: " + json.dumps(loans, indent=2)
+    req.role == "customer"
+    try:
+        cust = get_customer(req.customer_id)
+        txs = get_transactions(req.customer_id, limit=50)
+        cards = get_credit_cards(req.customer_id)
+        loans = get_loans(req.customer_id)
+        total_credit_limit = sum((c.get("credit_limit") or 0) for c in cards)
+        total_balance = sum((c.get("current_balance") or 0) for c in cards)
+        credit_util = (total_balance / total_credit_limit * 100) if total_credit_limit else None
+        recent_tx_count = len(txs)
+        monthly_income_estimate = None
+        credits = [t for t in txs if str(t.get("type","")).lower() == "credit"]
+        if credits:
+            try:
+                monthly_income_estimate = max((t.get("amount") or 0) for t in credits)
+            except Exception:
+                monthly_income_estimate = None
+        summary = {
+            "customer_id": cust.get("customer_id"),
+            "name": cust.get("name"),
+            "monthly_income_estimate": monthly_income_estimate,
+            "credit_utilization_pct": round(credit_util,2) if credit_util is not None else None,
+            "recent_tx_count": recent_tx_count,
+            "active_loans_count": len(loans),
+        }
+        combined_context += "\n\nCustomerSummary: " + json.dumps(summary, indent=2)
+        combined_context += "\n\nCustomerFullProfile:"
+        combined_context += "\n- Profile: " + json.dumps(cust, indent=2)
+        combined_context += "\n- Transactions (Recent 50): " + json.dumps(txs, indent=2)
+        combined_context += "\n- Credit Cards: " + json.dumps(cards, indent=2)
+        combined_context += "\n- Loans: " + json.dumps(loans)
 
-            _sessions_in_memory[session_id].append({"role":"system","text":f"Fetched summary and full profile for {req.customer_id} and injected into prompt context.","time":datetime.utcnow().isoformat()})
-        except Exception:
-            combined_context += "\n\nCustomerSummary: unavailable (read error)"
+        _sessions_in_memory[session_id].append({"role":"system","text":f"Fetched summary and full profile for {req.customer_id} and injected into prompt context.","time":datetime.utcnow().isoformat()})
+    except Exception:
+        combined_context += "\n\nCustomerSummary: unavailable (read error)"
 
     assistant_reply = None
     if CREW_AVAILABLE:
@@ -403,10 +543,27 @@ def api_chat(req: ChatRequest):
             result = crew.kickoff()
             assistant_reply = str(result)
             try:
-                import json as _json
-                parsed = _json.loads(assistant_reply)
-                if isinstance(parsed, dict) and parsed.get("decision") and parsed.get("reason") and req.customer_id:
-                    record_decision(req.customer_id, parsed["decision"], parsed["reason"])
+                
+                print("[DEBUG] assistant raw reply:", assistant_reply)
+                m_dec = re.search(r"(?mi)^Decision\s*:\s*(.+)$", assistant_reply)
+                m_rea = re.search(r"(?mi)^Reason\s*:\s*((?:.|\n)*?)(?:\n\s*\n|$)", assistant_reply)
+
+                decision_val = m_dec.group(1).strip() if m_dec else None
+                reason_val = None
+
+                if m_rea:
+                    raw_reason = m_rea.group(1).strip()
+                    lines = [ln.strip() for ln in raw_reason.splitlines() if ln.strip()]
+                    reason_val = " ".join(lines)
+
+                print("[DEBUG] extracted decision:", decision_val)
+                print("[DEBUG] extracted reason:", reason_val)
+
+                if decision_val and reason_val and req.customer_id:
+                    print(f"[INFO] saving decision for {req.customer_id}")
+                    record_decision(req.customer_id, decision_val, reason_val)
+                else:
+                    print("[WARN] Could not extract decision/reason from assistant reply")
             except Exception:
                 pass
         except Exception as exc:
@@ -447,32 +604,31 @@ def api_get_loans(customer_id: str):
     loans = get_loans(customer_id)
     return {"status":"ok", "loans": loans}
 
-# Updated Pydantic Models to handle floats from frontend
 
 class BillingCycle(BaseModel):
     cycle_start: str
     cycle_end: str
-    amount_due: float      # Changed from implicit strict check to float
-    amount_paid: float     # Changed from implicit strict check to float
+    amount_due: float     
+    amount_paid: float     
     payment_date: str
 
 class CreditCard(BaseModel):
     card_number: str
-    credit_limit: float    # Changed from int to float
-    current_balance: float # Changed from int to float
-    billing_cycles: List[BillingCycle] # Better validation than just 'list'
+    credit_limit: float   
+    current_balance: float
+    billing_cycles: List[BillingCycle] 
 
 class Loan(BaseModel):
     loan_id: str
     loan_type: str
-    principal_amount: float     # Changed from int to float
-    outstanding_amount: float   # Changed from int to float
-    monthly_due: float          # Changed from int to float
+    principal_amount: float    
+    outstanding_amount: float   
+    monthly_due: float          
     last_payment_date: str
 
 class Transaction(BaseModel):
     date: str
-    amount: float          # Changed from int to float
+    amount: float          
     type: str
     description: str
 
@@ -480,7 +636,6 @@ class customerdata(BaseModel):
     customer_id: str
     account_creation_date: Optional[str] = None
     name: Optional[str] = None
-    # Ensure these are typed as Lists of the models above
     credit_cards: Optional[List[CreditCard]] = None
     loans: Optional[List[Loan]] = None
     transactions: Optional[List[Transaction]] = None

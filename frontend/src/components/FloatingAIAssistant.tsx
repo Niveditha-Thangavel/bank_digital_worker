@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
-import { sendChatMessage } from '@/lib/api';
+import { sendAdminChatMessage} from '@/lib/api';
 import { toast } from 'sonner';
 
 interface Message {
@@ -102,7 +102,7 @@ export function FloatingAIAssistant() {
     setIsLoading(true);
 
     try {
-      const response = await sendChatMessage(userMessage, undefined, sessionId);
+      const response = await sendAdminChatMessage(userMessage, undefined, sessionId);
       setSessionId(response.session_id);
       setMessages(prev => [...prev, { role: 'assistant', content: response.reply }]);
     } catch (error) {

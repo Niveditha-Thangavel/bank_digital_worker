@@ -38,12 +38,6 @@
           "amount": 1200.0,
           "type": "debit",
           "description": "Electronics"
-        },
-        {
-          "date": "2025-11-02",
-          "amount": 600.0,
-          "type": "debit",
-          "description": "Grocery"
         }
       ]
     },

@@ -1,10 +1,25 @@
 {
   "decisions": [
     {
+      "id": "736d363b-8dcc-4910-9770-15b14b2c49e0",
+      "customer_id": "C102",
+      "decision": "approve",
+      "reason": "Approved by admin request",
+      "created_at": "2025-12-12T08:54:39.795640"
+    },
+    {
+      "id": "392d8344-9131-4fa7-ae7a-4c0a3aa46d07",
+      "customer_id": "C101",
+      "decision": "review",
+      "reason": "unavailable (read error)",
+      "created_at": "2025-12-12T09:37:00.310535"
+    },
+    {
+      "id": "5a73ac35-df01-451d-84c9-17b45331a131",
       "customer_id": "C101",
       "decision": "REVIEW",
-      "reason": "Customer satisfies 10 out of 11 eligibility rules. The monthly income (\u20b95,000) is below the required threshold of \u20b920,000, which is the primary reason for not being fully approved. All other criteria, including account age, payment history (with one minor underpayment), transaction health, credit utilization, current loans, income-spend health, and credit history strength, are met.",
-      "created_at": "2025-12-11T13:08:49.594038"
+      "reason": "Keep under monitor",
+      "created_at": "2025-12-12T09:37:31.745741"
     }
   ]
 }
