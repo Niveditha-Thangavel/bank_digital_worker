@@ -3,4 +3,4 @@ uvicorn[standard]
 crewai
 crewai_tools
 litellm
-'crewai[gogle-genai]'
+crewai[gogle-genai]

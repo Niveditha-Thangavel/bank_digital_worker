@@ -1,0 +1,14 @@
+pip install -r requirements.txt
+
+
+export LLM_API_KEY = "your-api-key-here"
+
+cd frontend 
+
+npm run dev 
+
+cd ..
+
+uvicorn agent:app --reload 
+
+

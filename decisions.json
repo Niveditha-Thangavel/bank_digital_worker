@@ -4,22 +4,15 @@
       "id": "736d363b-8dcc-4910-9770-15b14b2c49e0",
       "customer_id": "C102",
       "decision": "approve",
-      "reason": "Approved by admin request",
-      "created_at": "2025-12-12T08:54:39.795640"
+      "reason": "stable income",
+      "created_at": "2025-12-12T11:49:07.425882"
     },
     {
-      "id": "392d8344-9131-4fa7-ae7a-4c0a3aa46d07",
+      "id": "91ba0825-5f35-4c85-8605-f2cbd5954be3",
       "customer_id": "C101",
-      "decision": "review",
-      "reason": "unavailable (read error)",
-      "created_at": "2025-12-12T09:37:00.310535"
-    },
-    {
-      "id": "5a73ac35-df01-451d-84c9-17b45331a131",
-      "customer_id": "C101",
-      "decision": "REVIEW",
-      "reason": "Keep under monitor",
-      "created_at": "2025-12-12T09:37:31.745741"
+      "decision": "REJECT",
+      "reason": "Unfortunately, your loan application does not meet our current eligibility criteria. This is primarily because your estimated monthly income is below our minimum requirement, your account is less than 6 months old, and there isn't a clear positive margin between your monthly income and spending. Additionally, we're looking for a stronger financial buffer and more stable credit history for loan approval.",
+      "created_at": "2025-12-12T11:43:46.757873"
     }
   ]
 }
