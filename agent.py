@@ -55,7 +55,6 @@ def _load_customer_accounts() -> List[Dict[str, Any]]:
     return data.get("customer_accounts", []) if isinstance(data, dict) else []
 
 def _load_decisions() -> Dict[str, List[Dict[str, Any]]]:
-    """Always return canonical dict shape."""
     raw = _read_json_file(DECISIONS_FILE)
     if isinstance(raw, dict) and "decisions" in raw and isinstance(raw["decisions"], list):
         return raw
@@ -64,7 +63,6 @@ def _load_decisions() -> Dict[str, List[Dict[str, Any]]]:
     return {"decisions": []}
 
 def _append_decision(decision_obj: Dict[str, Any], override_existing: bool = False) -> Dict[str, Any]:
-    """Append decision WITHOUT LOCK."""
     data = _load_decisions()
     decisions = data.get("decisions", [])
 
