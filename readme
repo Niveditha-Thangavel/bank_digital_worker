@@ -10,5 +10,3 @@ npm run dev
 cd ..
 
 uvicorn agent:app --reload 
-
-
